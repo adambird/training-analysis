@@ -122,3 +122,10 @@ median) plus a full session table. The `bin/fitness` report carries a focused
 ```sh
 bundle exec ruby test/power_series_test.rb
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+Bundles [Chart.js](https://www.chartjs.org) (`vendor/chart.umd.min.js`, MIT
+licensed) so generated reports render offline.
