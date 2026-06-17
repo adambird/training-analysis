@@ -1,11 +1,15 @@
 # Training Analysis
 
 Analyses power data from cycling workout files (FIT, TCX, GPX — gzipped or not)
-to track how peak efforts over fixed time windows progress over time.
+to track cycling fitness and training over time.
 
-Answers questions like: *in rides over 120 minutes, how many times did I hold
-300W+ for a minute — and is that count, and the power of those efforts,
-trending up or down?*
+The **power-duration curve** (best mean-maximal power at each duration) is the
+primary progression signal — it answers *"is my power improving?"* directly,
+without arbitrary thresholds. Alongside it, **effort frequency** answers a
+separate question — *"how often do I produce near-best efforts?"* — using a
+threshold set to a percentage of the rider's *own* rolling-best power at each
+duration (e.g. ≥85% of the best 1/3/5-min in the trailing 90 days), so it stays
+meaningful as fitness changes rather than drifting with it.
 
 ## Setup
 
@@ -22,20 +26,21 @@ FTP, and race calendar. `workout_dir` / `ftp` can also be set via the
 ## Usage
 
 ```sh
-# Uses workout_dir from config.yml; rides >= 120 min;
-# windows 1min@300W, 3min@280W, 5min@260W
+# Uses workout_dir from config.yml; rides >= 120 min; durations 1/3/5 min;
+# effort threshold = 85% of rolling 90-day best at each duration
 bundle exec bin/analyze
 
-# Custom windows/thresholds and per-ride CSV output
+# Custom durations, threshold %, reference window, and per-ride CSV
 bundle exec bin/analyze --min-duration 90 \
-  --window 60:320 --window 300:250 \
+  --window 60 --window 300 --pct 80 --ref-window-days 60 \
   --csv data/rides.csv
 ```
 
-The terminal report shows, per window, a monthly summary (rides, qualifying
-efforts, efforts per ride/hour, mean effort power, best effort) plus
-least-squares trend slopes scaled to per-30-days. The CSV holds the per-ride
-detail.
+Per duration, the terminal report shows a monthly summary — **best power**
+(the progression signal), the rolling effort **threshold** that month, and
+**effort count / per-hour** (the frequency signal) — plus per-30-day trend
+slopes for both. `--pct` sets the effort threshold (% of rolling best);
+`--ref-window-days` sets how far back "best" looks.
 
 ## Shareable report
 
@@ -99,11 +104,15 @@ median) plus a full session table. The `bin/fitness` report carries a focused
 - **Normalised power** follows Coggan's definition: 30s rolling average,
   fourth power, mean, fourth root — reported for whole rides only, since NP
   is not meaningful over short windows.
+- **Effort thresholds** are per-ride: for each duration, the threshold is a
+  percentage (default 85%) of the best mean-maximal power at that duration over
+  a trailing window (default 90 days), drawn from all rides — so it tracks
+  current fitness instead of being a fixed wattage. The power-duration curve
+  (best power per duration) is the threshold-free progression metric.
 - **Effort counting** scans rolling means left to right; when a window meets
   the threshold it slides forward to the local peak alignment, records that
   effort, then skips a full window length. Efforts never overlap, and a
-  sustained block above threshold counts once per window length (5 continuous
-  minutes over 300W = five 1-minute efforts).
+  sustained block above threshold counts once per window length.
 - Duplicate exports of the same ride (same start time and duration) are
   de-duplicated.
 

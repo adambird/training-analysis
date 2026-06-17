@@ -26,13 +26,15 @@ params = raw.each_line.take_while { |l| l.start_with?('#') }
 rows = CSV.parse(raw.lines.reject { |l| l.start_with?('#') }.join, headers: true)
 abort "#{options[:input]} is empty" if rows.empty?
 
-# Recover the window/threshold specs from headers like efforts_1min_over_300w
-windows = rows.headers.filter_map { |h| h&.match(/\Aefforts_(\d+)min_over_(\d+)w\z/) }
-              .map { |m| { minutes: m[1].to_i, threshold: m[2].to_i } }
+# Recover the effort durations from headers like efforts_1min
+windows = rows.headers.filter_map { |h| h&.match(/\Aefforts_(\d+)min\z/) }
+              .map { |m| { minutes: m[1].to_i } }
 abort 'no effort columns found in CSV' if windows.empty?
 
 # From the params comment if present, else inferred from the shortest ride
 min_duration = (params['min_duration_min'] || rows.map { |r| r['duration_min'].to_f }.min.floor).to_i
+effort_pct = (params['effort_pct'] || 85).to_i
+ref_window_days = (params['ref_window_days'] || 90).to_i
 
 # Stats are computed for every month in the CSV (not just the charted
 # window) so each chart can show a year-ago ghost line for context.
@@ -43,12 +45,14 @@ stats = all_by_month.transform_values do |rides|
   hours = rides.sum { |r| r['duration_min'].to_f } / 60.0
   per_window = windows.to_h do |w|
     m = w[:minutes]
-    efforts = rides.sum { |r| r["efforts_#{m}min_over_#{w[:threshold]}w"].to_i }
-    weighted = rides.sum { |r| r["efforts_#{m}min_over_#{w[:threshold]}w"].to_i * r["mean_effort_#{m}min_w"].to_f }
+    efforts = rides.sum { |r| r["efforts_#{m}min"].to_i }
+    weighted = rides.sum { |r| r["efforts_#{m}min"].to_i * r["mean_effort_#{m}min_w"].to_f }
+    thresholds = rides.filter_map { |r| r["threshold_#{m}min_w"]&.to_f }
     [m, {
       efforts: efforts,
       efforts_per_hour: (efforts / hours).round(2),
       mean_effort_w: efforts.zero? ? nil : (weighted / efforts).round(1),
+      threshold_w: thresholds.empty? ? nil : (thresholds.sum / thresholds.size).round,
       best_w: rides.map { |r| r["best_#{m}min_avg_w"].to_f }.max.round(1)
     }]
   end
@@ -78,11 +82,11 @@ np_json = JSON.generate(
 charts_json = JSON.generate(windows.map do |w|
   m = w[:minutes]
   {
-    title: "#{m}min efforts over #{w[:threshold]}W",
-    threshold: w[:threshold],
+    title: "#{m}min — best power, and efforts ≥ #{effort_pct}% of rolling #{ref_window_days}d best",
     effortsPerHour: series.() { |s| s[:windows][m][:efforts_per_hour] },
     effortsPerHourPrev: ghost.() { |s| s[:windows][m][:efforts_per_hour] },
     meanEffortW: series.() { |s| s[:windows][m][:mean_effort_w] },
+    thresholdW: series.() { |s| s[:windows][m][:threshold_w] },
     bestW: series.() { |s| s[:windows][m][:best_w] },
     bestWPrev: ghost.() { |s| s[:windows][m][:best_w] }
   }
@@ -101,25 +105,25 @@ np_table = table(
 
 window_sections = windows.map do |w|
   monthly_table = table(
-    ['month', 'efforts', 'efforts/hr', 'mean effort W', 'best W'],
+    ['month', 'best W', 'threshold W', 'efforts', 'efforts/hr', 'mean effort W'],
     months.map do |m|
       s = stats[m][:windows][w[:minutes]]
-      [m, s[:efforts], s[:efforts_per_hour], s[:mean_effort_w], s[:best_w]]
+      [m, s[:best_w], s[:threshold_w], s[:efforts], s[:efforts_per_hour], s[:mean_effort_w]]
     end
   )
   <<~HTML
-    <details><summary>Monthly numbers — #{w[:minutes]}min over #{w[:threshold]}W</summary>
+    <details><summary>Monthly numbers — #{w[:minutes]}min</summary>
     #{monthly_table}</details>
   HTML
 end
 
 ride_headers = ['date', 'duration min', 'moving min', 'avg W', 'NP W'] +
-               windows.flat_map { |w| ["best #{w[:minutes]}min W", "#{w[:minutes]}min efforts", 'mean effort W'] }
+               windows.flat_map { |w| ["best #{w[:minutes]}min W", "#{w[:minutes]}min thresh W", "#{w[:minutes]}min efforts"] }
 ride_rows = included_rides.sort_by { |r| r['date'] }.map do |r|
   [r['date'], r['duration_min'], r['moving_min'], r['avg_w'], r['np_w']] +
     windows.flat_map { |w|
       m = w[:minutes]
-      [r["best_#{m}min_avg_w"], r["efforts_#{m}min_over_#{w[:threshold]}w"], r["mean_effort_#{m}min_w"]]
+      [r["best_#{m}min_avg_w"], r["threshold_#{m}min_w"], r["efforts_#{m}min"]]
     }
 end
 
@@ -127,13 +131,13 @@ chart_js = File.read(File.expand_path('../vendor/chart.umd.min.js', __dir__))
 
 # Derive title and filename from the generation parameters so multiple
 # versions are distinguishable side by side (browser tab and on disk).
-windows_label = windows.map { |w| "#{w[:minutes]}min@#{w[:threshold]}W" }.join(', ')
+windows_label = windows.map { |w| "#{w[:minutes]}min" }.join('/') + " @#{effort_pct}%"
 duration_label = min_duration.positive? ? "rides ≥ #{min_duration} min" : 'all rides'
 scope = options[:months] ? "trailing #{options[:months]} months" : 'all months'
 scope += " excl. #{options[:exclude].join(', ')}" unless options[:exclude].empty?
 options[:title] ||= "Training power trends — #{duration_label}, #{windows_label}, #{scope}"
 options[:output] ||= 'reports/' + ['report', min_duration.positive? ? "#{min_duration}min" : 'allrides',
-                                   *windows.map { |w| "#{w[:minutes]}m#{w[:threshold]}w" },
+                                   *windows.map { |w| "#{w[:minutes]}min" },
                                    options[:months] && "#{options[:months]}mo",
                                    *options[:exclude].map { |m| "excl#{m}" }].compact.join('-') + '.html'
 
@@ -180,13 +184,15 @@ html = <<~HTML
       <strong>How these numbers are produced</strong>
       <ul>
         <li>Source: FIT/TCX/GPX files, resolved to a 1Hz power series per ride.</li>
-        <li><strong>Efforts</strong>: non-overlapping windows (e.g. 1 min) whose average power meets the
-            threshold, scanned over elapsed time with recording gaps as 0W &mdash; an effort can never span
-            a pause. A sustained block counts once per window length.</li>
-        <li><strong>Efforts/hr</strong> normalises for ride length so long and short rides compare fairly.</li>
-        <li><strong>Mean effort W</strong> is the average power of the qualifying efforts (sits just above
-            the threshold by construction; the count and best are the progression signals).</li>
-        <li><strong>Best W</strong> is the highest rolling average for the window that month.</li>
+        <li><strong>Best W</strong> (the power-duration curve) is the highest rolling average for the
+            duration that month &mdash; the primary, threshold-free progression signal.</li>
+        <li><strong>Effort threshold</strong> is not a fixed wattage: it is #{effort_pct}% of the best
+            mean-maximal power at that duration over the trailing #{ref_window_days} days, so it tracks
+            current fitness. An <strong>effort</strong> is a non-overlapping window at or above it
+            (scanned over elapsed time, gaps as 0W, so it can't span a pause).</li>
+        <li><strong>Efforts/hr</strong> normalises for ride length; it answers "how often do I produce a
+            near-best effort", a frequency signal distinct from the power curve.</li>
+        <li><strong>Mean effort W</strong> is the average power of the qualifying efforts.</li>
         <li><strong>Normalised power</strong> (Coggan: 30s smoothing, 4th-power mean) is whole-ride only,
             computed over moving time to match Strava/Garmin/TrainingPeaks.</li>
       </ul>
@@ -266,38 +272,44 @@ html = <<~HTML
           data: {
             labels: months,
             datasets: [
-              {
-                type: 'bar', label: 'efforts per hour', data: c.effortsPerHour,
-                backgroundColor: 'rgba(54, 122, 235, 0.4)', yAxisID: 'count', order: 2
-              },
-              medianDataset('efforts per hour', c.effortsPerHour, '#367aeb', 'count'),
-              ghostDataset('efforts per hour', c.effortsPerHourPrev, '#367aeb', 'count'),
-              {
-                type: 'line', label: 'mean effort W', data: c.meanEffortW,
-                borderColor: '#e8833a', backgroundColor: '#e8833a',
-                yAxisID: 'watts', tension: 0.3, spanGaps: true, order: 1
-              },
-              medianDataset('mean effort W', c.meanEffortW, '#e8833a', 'watts'),
+              // Best power (the power curve) is the primary progression signal.
               {
                 type: 'line', label: 'best W', data: c.bestW,
                 borderColor: '#2a9d4e', backgroundColor: '#2a9d4e',
-                yAxisID: 'watts', tension: 0.3, order: 0
+                yAxisID: 'watts', tension: 0.3, borderWidth: 2.5, order: 0
               },
               medianDataset('best W', c.bestW, '#2a9d4e', 'watts'),
-              ghostDataset('best W', c.bestWPrev, '#2a9d4e', 'watts')
+              ghostDataset('best W', c.bestWPrev, '#2a9d4e', 'watts'),
+              // Rolling effort threshold (= pct of rolling best) for reference.
+              {
+                type: 'line', label: 'effort threshold W', data: c.thresholdW,
+                borderColor: '#bbb', backgroundColor: '#bbb', borderDash: [3, 3],
+                borderWidth: 1, pointRadius: 0, yAxisID: 'watts', tension: 0.3, order: 1
+              },
+              {
+                type: 'line', label: 'mean effort W', data: c.meanEffortW,
+                borderColor: '#e8833a', backgroundColor: '#e8833a',
+                yAxisID: 'watts', tension: 0.3, spanGaps: true, order: 2
+              },
+              medianDataset('mean effort W', c.meanEffortW, '#e8833a', 'watts'),
+              // Effort frequency — a separate intensity signal, secondary axis.
+              {
+                type: 'bar', label: 'efforts per hour', data: c.effortsPerHour,
+                backgroundColor: 'rgba(54, 122, 235, 0.35)', yAxisID: 'count', order: 3
+              },
+              medianDataset('efforts per hour', c.effortsPerHour, '#367aeb', 'count'),
+              ghostDataset('efforts per hour', c.effortsPerHourPrev, '#367aeb', 'count')
             ]
           },
           options: {
             plugins: {
-              title: { display: true, text: c.title, font: { size: 16 } },
+              title: { display: true, text: c.title, font: { size: 15 } },
               legend: { labels: { sort: (a, b) => a.datasetIndex - b.datasetIndex } }
             },
             scales: {
-              count: { position: 'left', beginAtZero: true,
-                       title: { display: true, text: 'efforts / hour' } },
-              watts: { position: 'right', grid: { drawOnChartArea: false },
-                       suggestedMin: c.threshold - 20,
-                       title: { display: true, text: 'watts' } }
+              watts: { position: 'left', title: { display: true, text: 'watts (best / threshold / effort)' } },
+              count: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false },
+                       title: { display: true, text: 'efforts / hour' } }
             }
           }
         });

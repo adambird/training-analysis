@@ -6,7 +6,9 @@ require_relative '../lib/config'
 options = {
   dir: Config.workout_dir,
   min_duration: 120,
-  windows: { 60 => 300, 180 => 280, 300 => 260 },
+  windows: [60, 180, 300],
+  pct: 85,
+  ref_window_days: 90,
   csv: nil
 }
 
@@ -14,20 +16,20 @@ OptionParser.new do |o|
   o.banner = 'Usage: bin/analyze [options]'
   o.on('--dir DIR', 'Directory of .fit/.tcx/.gpx files (gzipped ok)') { |v| options[:dir] = File.expand_path(v) }
   o.on('--min-duration MINUTES', Integer, 'Only rides at least this long (default 120; 0 for all rides)') { |v| options[:min_duration] = v }
-  o.on('--window SPEC', 'window_seconds:threshold_watts, repeatable; replaces defaults',
-       'e.g. --window 60:300 --window 300:250') do |v|
-    options[:custom_windows] ||= {}
-    seconds, watts = v.split(':').map(&:to_i)
-    abort "bad --window spec: #{v}" if seconds <= 0 || watts <= 0
-    options[:custom_windows][seconds] = watts
+  o.on('--window SECONDS', Integer, 'Effort duration in seconds, repeatable; replaces defaults (60 180 300)') do |v|
+    (options[:custom_windows] ||= []) << v
   end
+  o.on('--pct N', Integer, 'Effort threshold as % of rolling-best at each duration (default 85)') { |v| options[:pct] = v }
+  o.on('--ref-window-days N', Integer, 'Trailing window for "best" power (default 90)') { |v| options[:ref_window_days] = v }
   o.on('--csv FILE', 'Write per-ride results to CSV') { |v| options[:csv] = v }
 end.parse!
 
 abort "Workout directory not found: #{options[:dir].inspect}. Set workout_dir in config.yml (copy config.example.yml) or pass --dir." unless options[:dir] && Dir.exist?(options[:dir])
 
-windows = options[:custom_windows] || options[:windows]
-analyzer = Analyzer.new(dir: options[:dir], min_duration_minutes: options[:min_duration], windows: windows)
+windows = (options[:custom_windows] || options[:windows]).sort
+analyzer = Analyzer.new(dir: options[:dir], min_duration_minutes: options[:min_duration],
+                        windows: windows, effort_pct: options[:pct] / 100.0,
+                        ref_window_days: options[:ref_window_days])
 
 duration_label = options[:min_duration].positive? ? ">= #{options[:min_duration]} min" : '(any duration)'
 
@@ -53,30 +55,32 @@ end
 np_slope = Analyzer.trend_slope(results.map { |r| [day.(r), r.activity.normalised_power] })
 puts "trend/30 days:  NP #{fmt.(np_slope, 'W')}"
 
-windows.each do |window, threshold|
+# Best W (the power curve) is the primary progression signal; effort counts
+# are a separate "how often did I produce a near-best effort" intensity signal,
+# thresholded at a % of each ride's rolling-best rather than a fixed wattage.
+windows.each do |window|
   minutes = window / 60.0
   label = minutes == minutes.to_i ? "#{minutes.to_i}min" : "#{window}s"
-  puts "\n== #{label} efforts over #{threshold}W =="
-  puts format('%-9s %6s %8s %13s %11s %15s %10s', 'month', 'rides', 'efforts', 'efforts/ride', 'efforts/hr', 'mean effort W', 'best W')
+  puts "\n== #{label}: best power, and efforts >= #{options[:pct]}% of rolling #{options[:ref_window_days]}d best =="
+  puts format('%-9s %6s %10s %12s %8s %15s', 'month', 'rides', 'best W', 'threshold W', 'efforts', 'efforts/hr')
 
   summary = analyzer.monthly_summary[window]
   summary.each do |month, s|
-    puts format('%-9s %6d %8d %13.1f %11.2f %15s %10s',
-                month, s[:rides], s[:efforts], s[:efforts_per_ride], s[:efforts_per_hour],
-                s[:mean_effort_w] ? s[:mean_effort_w].round(1) : '-',
-                s[:best_w] ? s[:best_w].round(1) : '-')
+    puts format('%-9s %6d %10s %12s %8d %15.2f',
+                month, s[:rides],
+                s[:best_w] ? s[:best_w].round(1) : '-',
+                s[:mean_threshold_w] ? s[:mean_threshold_w].round : '-',
+                s[:efforts], s[:efforts_per_hour])
   end
 
   # Trends, fitted per ride against days elapsed
   with_window = results.map { |r| [r, r.window_results.find { |wr| wr.window == window }] }
 
-  count_slope = Analyzer.trend_slope(with_window.map { |r, wr| [day.(r), wr.effort_count / (r.activity.duration_seconds / 3600.0)] })
   best_slope = Analyzer.trend_slope(with_window.map { |r, wr| [day.(r), wr.best_mean] }.reject { |_, y| y.nil? })
-  effort_points = with_window.filter_map { |r, wr| wr.mean_effort_power && [day.(r), wr.mean_effort_power] }
-  effort_slope = Analyzer.trend_slope(effort_points)
+  count_slope = Analyzer.trend_slope(with_window.map { |r, wr| [day.(r), wr.effort_count / (r.activity.duration_seconds / 3600.0)] })
 
-  puts "trend/30 days:  efforts #{fmt.(count_slope, 'per hour')}, " \
-       "mean effort #{fmt.(effort_slope, 'W')}, best #{label} #{fmt.(best_slope, 'W')}"
+  puts "trend/30 days:  best #{label} #{fmt.(best_slope, 'W')} (progression), " \
+       "efforts #{fmt.(count_slope, 'per hour')} (intensity frequency)"
 end
 
 if options[:csv]
