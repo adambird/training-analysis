@@ -1,0 +1,8 @@
+# Copy to config.yml (gitignored) and edit for your setup.
+
+# Directory containing your .fit / .tcx / .gpx workout files (gzipped is fine).
+workout_dir: ~/path/to/workout/files
+
+# Your functional threshold power / critical power in watts. Anchors interval
+# effort detection (an "effort" is power sustained above ~95% of this).
+ftp: 250

@@ -1,0 +1,620 @@
+#!/usr/bin/env ruby
+# Fitness-progression report: power curve comparison, durability, critical
+# power trend, and aerobic efficiency, rendered as a self-contained HTML
+# file (Chart.js inlined from vendor/).
+require 'optparse'
+require 'json'
+require 'csv'
+require 'date'
+require_relative '../lib/fitness'
+require_relative '../lib/intervals'
+require_relative '../lib/config'
+
+options = {
+  dir: Config.workout_dir,
+  months: 24,    # span of the monthly trend charts
+  compare: 12,   # power-curve period length, latest vs prior
+  exclude: [],
+  csv: nil, output: nil, open: true, snapshot: false
+}
+OptionParser.new do |o|
+  o.banner = 'Usage: bin/fitness [options]'
+  o.on('--dir DIR', 'Directory of .fit/.tcx/.gpx files (gzipped ok)') { |v| options[:dir] = File.expand_path(v) }
+  o.on('--months N', Integer, 'Months of monthly trends to chart (default 24)') { |v| options[:months] = v }
+  o.on('--compare N', Integer, 'Power-curve comparison period in months (default 12)') { |v| options[:compare] = v }
+  o.on('--exclude YYYY-MM', 'Exclude a month from monthly charts, repeatable') { |v| options[:exclude] << v }
+  o.on('--races FILE', 'Race days YAML (default races.yml next to the repo)') { |v| options[:races] = v }
+  o.on('--csv FILE', 'Write per-ride metrics to CSV') { |v| options[:csv] = v }
+  o.on('--output FILE', 'HTML file to write (default derived from parameters)') { |v| options[:output] = v }
+  o.on('--no-open', 'Do not open the report in the browser') { options[:open] = false }
+  o.on('--snapshot [DATE]', 'Also save a dated copy under reports/ (default today, or YYYY-MM-DD)') { |v| options[:snapshot] = v || true }
+end.parse!
+
+abort "Workout directory not found: #{options[:dir].inspect}. Set workout_dir in config.yml (copy config.example.yml) or pass --dir." unless options[:dir] && Dir.exist?(options[:dir])
+
+paths = Dir.children(options[:dir])
+           .select { |f| f =~ /\.(fit|tcx|gpx)(\.gz)?\z/i }
+           .map { |f| File.join(options[:dir], f) }.sort
+abort "no workout files in #{options[:dir]}" if paths.empty?
+
+# --- Race days ---------------------------------------------------------------
+# Loaded up front so race days can be excluded from interval detection (a
+# race's repeated surges look like an interval set).
+require 'yaml'
+races_path = options[:races] || File.expand_path('../races.yml', __dir__)
+race_days = []
+race_list = []
+if File.exist?(races_path)
+  race_list = YAML.safe_load_file(races_path, permitted_classes: [Date])['races']
+                  .map { |r| { date: r['date'].is_a?(Date) ? r['date'] : Date.parse(r['date'].to_s), role: r['role'], name: r['name'] } }
+  race_days = race_list.map { |r| r[:date] }
+end
+
+interval_sessions = []
+rides = paths.filter_map do |path|
+  activity = Activity.load(path)
+  next unless activity
+
+  unless race_days.include?(activity.start_time.to_date)
+    session = Intervals.detect(activity, ftp: Config.ftp)
+    interval_sessions << session if session
+  end
+  Fitness.analyse_ride(activity)
+end.uniq { |r| [r.start_time, r.duration_seconds] }.sort_by(&:start_time)
+abort 'no rides with power data found' if rides.empty?
+interval_sessions = interval_sessions.uniq { |s| s.start_time.to_i }.sort_by(&:start_time)
+
+warn "#{rides.size} rides with power data (#{rides.first.start_time.strftime('%Y-%m-%d')} to #{rides.last.start_time.strftime('%Y-%m-%d')})"
+
+ride_date = ->(r) { Date.new(r.start_time.year, r.start_time.month, r.start_time.day) }
+
+RACE_METRICS = {
+  'NP W' => ->(r) { r.np_w },
+  'early 1m W' => ->(r) { r.early && r.early[60] },
+  'early 3m W' => ->(r) { r.early && r.early[180] },
+  'early 5m W' => ->(r) { r.early && r.early[300] },
+  '3m after 1500kJ W' => ->(r) { r.durability[180][:after][1500] },
+  '5m after 1500kJ W' => ->(r) { r.durability[300][:after][1500] }
+}.freeze
+
+race_analysis = race_list.filter_map do |race|
+  day_rides = rides.select { |r| ride_date.(r) == race[:date] }
+  next warn("race day #{race[:date]} has no rides — skipped") if day_rides.empty?
+
+  ride = day_rides.max_by(&:duration_seconds) # warm-ups are the shorter rides
+  has_power = ride.work_kj > 10 # a recorded but dead power meter reads ~0 kJ
+  warn "race day #{race[:date]}: ride has no usable power data" unless has_power
+  cohort = rides.select do |r|
+    d = ride_date.(r)
+    d < race[:date] && d >= race[:date] << 12 &&
+      r.duration_seconds >= 5400 && !race_days.include?(d)
+  end
+  metrics = RACE_METRICS.transform_values do |getter|
+    value = has_power ? getter.(ride) : nil
+    { value: value&.round(1),
+      pctl: Fitness.percentile_rank(cohort.filter_map { |r| getter.(r) }, value) }
+  end
+  {
+    label: race[:date].strftime('%Y-%m-%d') + (race[:role] ? " (#{race[:role]})" : '') +
+           (has_power ? '' : ' — no power data'),
+    name: race[:name], role: race[:role],
+    duration_min: (ride.duration_seconds / 60.0).round,
+    work_kj: has_power ? ride.work_kj : nil,
+    cohort_n: cohort.size,
+    metrics: metrics
+  }
+end
+
+# --- Power curve: latest N months vs the N before -------------------------
+latest = rides.last.start_time
+period_end = Date.new(latest.year, latest.month, 1).next_month
+p1_start = period_end << options[:compare]
+p0_start = p1_start << options[:compare]
+in_period = ->(r, from, to) { d = Date.new(r.start_time.year, r.start_time.month, r.start_time.day); d >= from && d < to }
+current_rides = rides.select { |r| in_period.(r, p1_start, period_end) }
+prior_rides = rides.select { |r| in_period.(r, p0_start, p1_start) }
+current_mmp = Fitness.aggregate_mmp(current_rides)
+prior_mmp = Fitness.aggregate_mmp(prior_rides)
+period_label = ->(from, to) { "#{from.strftime('%b %Y')}–#{(to << 1).strftime('%b %Y')}" }
+
+# --- Monthly series --------------------------------------------------------
+# Computed 12 months beyond the charted window so each month can show a
+# year-ago ghost value.
+last_month = Date.new(latest.year, latest.month, 1)
+ext_span = options[:months] + 12
+ext_months = (0...ext_span).map { |i| last_month << (ext_span - 1 - i) }
+by_month = rides.group_by { |r| Date.new(r.start_time.year, r.start_time.month, 1) }
+
+# Durability is aggregated as medians over the rides that actually reached
+# the kJ mark (peaks track one good day; medians track what's typical), plus
+# the frequency of such rides.
+monthly_by_month = ext_months.to_h do |month|
+  month_rides = by_month[month] || []
+  window_rides = rides.select { |r| (Date.new(r.start_time.year, r.start_time.month, r.start_time.day) - (month >> 1)).between?(-90, 0) }
+  cp = Fitness.cp_for(window_rides)
+  steady = month_rides.select(&:steady)
+  durability = Fitness::DURABILITY_WINDOWS.to_h do |w|
+    long_rides = month_rides.select { |r| r.durability[w][:after][Fitness::DURABILITY_KJS.first] }
+    [w, {
+      n_long: long_rides.size,
+      med_fresh: Fitness.median(long_rides.map { |r| r.durability[w][:fresh] })&.round(1),
+      med_after: Fitness::DURABILITY_KJS.to_h do |kj|
+        [kj, Fitness.median(month_rides.filter_map { |r| r.durability[w][:after][kj] })&.round(1)]
+      end,
+      max_after: Fitness::DURABILITY_KJS.to_h do |kj|
+        [kj, month_rides.filter_map { |r| r.durability[w][:after][kj] }.max&.round(1)]
+      end
+    }]
+  end
+  with_early = month_rides.select(&:early)
+  early = Fitness::EARLY_WINDOWS.to_h do |w|
+    vals = with_early.filter_map { |r| r.early[w] }
+    [w, { max: vals.max&.round(1), med: Fitness.median(vals)&.round(1) }]
+  end
+  [month, {
+    label: "#{month.strftime('%Y-%m')} (#{month_rides.size})",
+    cp: cp && cp[:cp],
+    w_prime: cp && cp[:w_prime_kj],
+    durability: durability,
+    early: early,
+    early_n: with_early.size,
+    ef: steady.empty? ? nil : (steady.sum(&:ef) / steady.size).round(3),
+    drift: (drifts = steady.filter_map(&:decoupling_pct)).empty? ? nil : (drifts.sum / drifts.size).round(1),
+    steady_n: steady.size
+  }]
+end
+
+charted_months = ext_months.last(options[:months])
+                           .reject { |m| options[:exclude].include?(m.strftime('%Y-%m')) }
+monthly = charted_months.map { |m| monthly_by_month[m] }
+# Year-ago lookup for ghost lines
+prev = ->(&getter) { charted_months.map { |m| (e = monthly_by_month[m << 12]) && getter.(e) } }
+
+# --- CSV --------------------------------------------------------------------
+if options[:csv]
+  CSV.open(options[:csv], 'w') do |csv|
+    csv << ['date', 'duration_min', 'work_kj'] +
+           Fitness::MMP_DURATIONS.map { |d| "best_#{Fitness.duration_label(d)}_w" } +
+           Fitness::DURABILITY_WINDOWS.flat_map { |w|
+             Fitness::DURABILITY_KJS.map { |kj| "best_#{Fitness.duration_label(w)}_after_#{kj}kj_w" }
+           } +
+           Fitness::EARLY_WINDOWS.map { |w| "early_#{Fitness.duration_label(w)}_w" } +
+           %w[ef decoupling_pct steady]
+    rides.each do |r|
+      csv << [r.start_time.strftime('%Y-%m-%d %H:%M'), (r.duration_seconds / 60.0).round(1), r.work_kj] +
+             Fitness::MMP_DURATIONS.map { |d| r.mmp[d]&.round(1) } +
+             Fitness::DURABILITY_WINDOWS.flat_map { |w|
+               Fitness::DURABILITY_KJS.map { |kj| r.durability[w][:after][kj]&.round(1) }
+             } +
+             Fitness::EARLY_WINDOWS.map { |w| r.early && r.early[w]&.round(1) } +
+             [r.ef, r.decoupling_pct, r.steady]
+    end
+  end
+  warn "Per-ride metrics written to #{options[:csv]}"
+end
+
+# --- HTML --------------------------------------------------------------------
+def table(headers, body_rows)
+  head = headers.map { |h| "<th>#{h}</th>" }.join
+  body = body_rows.map { |r| "<tr>#{r.map { |c| "<td>#{c.nil? ? '–' : c}</td>" }.join}</tr>" }.join("\n")
+  "<table><thead><tr>#{head}</tr></thead><tbody>#{body}</tbody></table>"
+end
+
+duration_labels = Fitness::MMP_DURATIONS.map { |d| Fitness.duration_label(d) }
+current_label = period_label.(p1_start, period_end)
+prior_label = period_label.(p0_start, p1_start)
+
+mmp_table = table(
+  ['duration', "#{current_label} W", "#{prior_label} W", 'change W'],
+  Fitness::MMP_DURATIONS.map do |d|
+    cur = current_mmp[d]&.round(1)
+    pri = prior_mmp[d]&.round(1)
+    [Fitness.duration_label(d), cur, pri, cur && pri ? (cur - pri).round(1) : nil]
+  end
+)
+
+durability_tables = Fitness::DURABILITY_WINDOWS.map do |w|
+  label = Fitness.duration_label(w)
+  body = table(
+    ["month", "rides ≥#{Fitness::DURABILITY_KJS.first}kJ", "median fresh #{label} W"] +
+    Fitness::DURABILITY_KJS.flat_map { |kj| ["median #{label} after #{kj}kJ", "best after #{kj}kJ"] },
+    monthly.map do |m|
+      d = m[:durability][w]
+      [m[:label], d[:n_long], d[:med_fresh]] +
+        Fitness::DURABILITY_KJS.flat_map { |kj| [d[:med_after][kj], d[:max_after][kj]] }
+    end
+  )
+  "<details><summary>Durability numbers — #{label}</summary>#{body}</details>"
+end
+
+early_table = table(
+  ['month', 'rides ≥30min'] +
+  Fitness::EARLY_WINDOWS.flat_map { |w| l = Fitness.duration_label(w); ["best #{l} W", "median #{l} W"] },
+  monthly.map do |m|
+    [m[:label], m[:early_n]] +
+      Fitness::EARLY_WINDOWS.flat_map { |w| [m[:early][w][:max], m[:early][w][:med]] }
+  end
+)
+
+monthly_table = table(
+  ['month', 'CP W', "W' kJ", 'EF', 'drift %', 'steady rides'],
+  monthly.map { |m| [m[:label], m[:cp], m[:w_prime], m[:ef], m[:drift], m[:steady_n]] }
+)
+
+race_section = ''
+if race_analysis.any?
+  race_table = table(
+    ['race', 'duration min', 'kJ', 'training rides compared'] +
+    RACE_METRICS.keys.map { |k| "#{k} (pctl)" },
+    race_analysis.map do |ra|
+      [[ra[:label], ra[:name]].compact.join(' '), ra[:duration_min], ra[:work_kj], ra[:cohort_n]] +
+        ra[:metrics].values.map { |m| m[:value] ? "#{m[:value]} (#{m[:pctl]})" : nil }
+    end
+  )
+  race_section = "<details open><summary>Race day numbers</summary>#{race_table}</details>"
+end
+
+races_json = JSON.generate(
+  labels: race_analysis.map { |ra| ra[:label] },
+  metrics: RACE_METRICS.keys.to_h { |k| [k, race_analysis.map { |ra| ra[:metrics][k][:pctl] }] }
+)
+
+intervals_section = ''
+# The chart focuses on 40/20 (the consistent indoor VO2 progression); the
+# table lists every detected interval type. bin/intervals has per-type trends.
+v40 = interval_sessions.select { |s| s.type == '40/20' }
+intervals_json = JSON.generate(
+  labels: v40.map { |s| s.start_time.strftime('%Y-%m-%d') },
+  meanW: v40.map(&:mean_w),
+  bestW: v40.map(&:best_w),
+  fadeW: v40.map { |s| s.fade_w || 0 }
+)
+if interval_sessions.any?
+  intervals_table = table(
+    ['date', 'type', 'reps', 'sets', 'mean W', 'best W', 'fade W', 'set averages'],
+    interval_sessions.map do |s|
+      [s.start_time.strftime('%Y-%m-%d'), s.type, s.rep_count, s.sets.map(&:size).join('+'),
+       s.mean_w, s.best_w, s.fade_w ? format('%+d', s.fade_w) : nil, s.set_avgs.join(' → ')]
+    end
+  )
+  type_counts = interval_sessions.group_by(&:type).transform_values(&:size)
+                                 .sort_by { |_, c| -c }.map { |t, c| "#{t} (#{c})" }.join(', ')
+  intervals_section = "<details><summary>Interval sessions — #{type_counts}</summary>#{intervals_table}</details>"
+end
+
+data_json = JSON.generate(
+  durations: duration_labels,
+  currentMmp: Fitness::MMP_DURATIONS.map { |d| current_mmp[d]&.round(1) },
+  priorMmp: Fitness::MMP_DURATIONS.map { |d| prior_mmp[d]&.round(1) },
+  currentLabel: current_label, priorLabel: prior_label,
+  months: monthly.map { |m| m[:label] },
+  cp: monthly.map { |m| m[:cp] },
+  cpPrev: prev.() { |m| m[:cp] },
+  wPrime: monthly.map { |m| m[:w_prime] },
+  durability: Fitness::DURABILITY_WINDOWS.to_h do |w|
+    [Fitness.duration_label(w), {
+      nLong: monthly.map { |m| m[:durability][w][:n_long] },
+      medFresh: monthly.map { |m| m[:durability][w][:med_fresh] },
+      medFreshPrev: prev.() { |m| m[:durability][w][:med_fresh] },
+      medAfter: Fitness::DURABILITY_KJS.to_h { |kj| [kj, monthly.map { |m| m[:durability][w][:med_after][kj] }] },
+      medAfterPrev: Fitness::DURABILITY_KJS.to_h { |kj| [kj, prev.() { |m| m[:durability][w][:med_after][kj] }] }
+    }]
+  end,
+  durabilityKjs: Fitness::DURABILITY_KJS,
+  firstKj: Fitness::DURABILITY_KJS.first,
+  early: Fitness::EARLY_WINDOWS.to_h do |w|
+    [Fitness.duration_label(w), {
+      max: monthly.map { |m| m[:early][w][:max] },
+      maxPrev: prev.() { |m| m[:early][w][:max] },
+      med: monthly.map { |m| m[:early][w][:med] }
+    }]
+  end,
+  ef: monthly.map { |m| m[:ef] },
+  efPrev: prev.() { |m| m[:ef] },
+  drift: monthly.map { |m| m[:drift] }
+)
+
+chart_js = File.read(File.expand_path('../vendor/chart.umd.min.js', __dir__))
+scope = "#{options[:months]}mo trends, #{options[:compare]}mo power-curve compare"
+scope += " excl. #{options[:exclude].join(', ')}" unless options[:exclude].empty?
+title = "Fitness progression — #{scope}"
+options[:output] ||= ['fitness', "#{options[:months]}mo", "cmp#{options[:compare]}",
+                      *options[:exclude].map { |m| "excl#{m}" }].join('-') + '.html'
+
+html = <<~HTML
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <meta charset="utf-8">
+    <title>#{title}</title>
+    <script>#{chart_js}</script>
+    <style>
+      body { font-family: -apple-system, sans-serif; max-width: 1000px; margin: 2rem auto; color: #222; padding: 0 1rem; }
+      h1 { font-size: 1.5rem; margin-bottom: 0.2rem; }
+      .subtitle { color: #666; margin-bottom: 2rem; }
+      .chart { margin: 2.5rem 0 0.5rem; }
+      details { margin: 0.5rem 0 2rem; }
+      summary { cursor: pointer; color: #555; font-size: 0.9rem; }
+      table { border-collapse: collapse; margin-top: 0.6rem; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+      th, td { padding: 0.25rem 0.7rem; text-align: right; border-bottom: 1px solid #e3e3e3; }
+      th:first-child, td:first-child { text-align: left; }
+      thead th { border-bottom: 2px solid #999; }
+      .methodology { font-size: 0.85rem; color: #555; border-top: 1px solid #ddd; margin-top: 2.5rem; padding-top: 1rem; }
+      .methodology ul { padding-left: 1.2rem; }
+    </style>
+  </head>
+  <body>
+    <h1>#{title}</h1>
+    <p class="subtitle">#{rides.size} rides, #{rides.first.start_time.strftime('%Y-%m-%d')} to #{rides.last.start_time.strftime('%Y-%m-%d')} &mdash; generated #{Time.now.strftime('%-d %b %Y')}</p>
+    <p>Faint dotted lines show the same month one year earlier (seasonality-free
+       comparison); dashed 3-month rolling medians are hidden by default &mdash;
+       click any legend entry to toggle. Month labels show ride counts.</p>
+    <div id="charts"></div>
+    <div id="tables">
+      <details><summary>Power curve numbers</summary>#{mmp_table}</details>
+      #{durability_tables.join("\n")}
+      #{race_section}
+      #{intervals_section}
+      <details><summary>Early punch numbers — first 30 min</summary>#{early_table}</details>
+      <details><summary>Monthly CP / aerobic efficiency numbers</summary>#{monthly_table}</details>
+    </div>
+    <div class="methodology">
+      <strong>How these numbers are produced</strong>
+      <ul>
+        <li><strong>Power curve</strong>: best average power at each duration across all rides in the
+            period. Comparing periods answers "faster or not" without choosing thresholds.</li>
+        <li><strong>Critical power</strong>: linear work&ndash;time model fitted to the best 3&ndash;20 min efforts
+            in the trailing 90 days. CP approximates FTP; W&prime; is anaerobic capacity. Both are
+            only as good as the hardest efforts ridden in the window &mdash; a month without maximal
+            efforts reads low.</li>
+        <li><strong>Durability</strong>: best 3-min and 5-min power when fresh vs after 1,500/2,500 kJ of
+            work in the same ride. Monthly lines are <em>medians</em> over the rides that reached the kJ
+            mark (a max would track one good day; the median tracks what is typical), with the count of
+            such rides as bars. "Median fresh" is over the same long rides, so the fresh-vs-fatigued gap
+            is like-for-like. Smaller gaps = better fatigue resistance, the key gravel-racing quality.</li>
+        <li><strong>Early punch</strong>: best 1/3/5-min power inside the first 30 minutes of a ride &mdash;
+            the efforts that follow early accelerations and make the front group at a race start.
+            Observational: it only registers when something demanded the effort, so the best lines
+            (races, hard group rides) carry the signal; medians mostly track easy-ride starts and are
+            hidden by default.</li>
+        <li><strong>Race days</strong> (from races.yml; the longest ride that day is the race): each race
+            metric is shown as a percentile of the training rides &ge;90 min in the preceding 12 months
+            (race days excluded). 50th percentile = a typical hard training day; 100th = the race
+            exceeded every training ride. Low percentiles on a race day are informative too &mdash; they
+            usually mean the race didn't demand that quality (e.g. no early surges).</li>
+        <li><strong>Interval sessions</strong>: detected by power signature (consistent efforts clustered
+            in time) and classified by rep length, since the files carry no workout name. The chart tracks
+            40/20 VO2 sessions (mean/best rep power, and fade = last set &minus; first set; negative means
+            starting too hot); the table lists every type found, including outdoor hill reps. Race days are
+            excluded. See <code>bin/intervals</code> for per-type trends across all interval types.</li>
+        <li><strong>Aerobic efficiency</strong> (EF): normalised power &divide; average heart rate on steady rides
+            (&ge;60 min moving, variability index &le;1.15, &ge;80% HR coverage). Rising EF at similar HR =
+            aerobic improvement. <strong>Drift</strong> compares power:HR between ride halves; lower is better
+            (&le;5% indicates good aerobic durability).</li>
+        <li>Power series are 1Hz over elapsed time with recording gaps as 0W; EF uses moving time.</li>
+      </ul>
+    </div>
+    <script>
+      const d = #{data_json};
+      const races = #{races_json};
+      const intervals = #{intervals_json};
+
+      // Centred 3-month rolling median: shows the trajectory without
+      // imposing a straight line on seasonal data, and is robust to
+      // single-month outliers. Toggle via the legend.
+      function rollingMedian(values) {
+        return values.map((_, i) => {
+          const win = values.slice(Math.max(0, i - 1), i + 2).filter(v => v != null);
+          if (!win.length) return null;
+          win.sort((a, b) => a - b);
+          const m = Math.floor(win.length / 2);
+          return win.length % 2 ? win[m] : +((win[m - 1] + win[m]) / 2).toFixed(2);
+        });
+      }
+
+      function medianDataset(label, values, color, axis) {
+        return {
+          type: 'line', label: label + ' 3mo median', data: rollingMedian(values),
+          borderColor: color, borderDash: [6, 4], borderWidth: 1.5,
+          pointRadius: 0, yAxisID: axis, hidden: true, spanGaps: true
+        };
+      }
+
+      // Same month one year earlier — removes seasonality by construction.
+      function ghostDataset(label, values, color, axis) {
+        return {
+          type: 'line', label: label + ' (yr ago)', data: values,
+          borderColor: color + '59', backgroundColor: color + '59',
+          borderWidth: 1.5, borderDash: [2, 3], pointRadius: 0,
+          yAxisID: axis, spanGaps: true
+        };
+      }
+
+      function addCanvas() {
+        const div = document.createElement('div');
+        div.className = 'chart';
+        const canvas = document.createElement('canvas');
+        div.appendChild(canvas);
+        document.getElementById('charts').appendChild(div);
+        return canvas;
+      }
+
+      const sortByIndex = { labels: { sort: (a, b) => a.datasetIndex - b.datasetIndex } };
+      const line = (label, data, color, extra = {}) => Object.assign({
+        type: 'line', label, data, borderColor: color, backgroundColor: color,
+        tension: 0.3, spanGaps: true
+      }, extra);
+
+      // 1. Power curve comparison
+      new Chart(addCanvas(), {
+        data: {
+          labels: d.durations,
+          datasets: [
+            line(d.currentLabel, d.currentMmp, '#2a9d4e'),
+            line(d.priorLabel, d.priorMmp, '#999')
+          ]
+        },
+        options: {
+          plugins: { title: { display: true, text: 'Power curve — best efforts by duration', font: { size: 16 } } },
+          scales: { y: { title: { display: true, text: 'watts' }, type: 'logarithmic' } }
+        }
+      });
+
+      // 2. Critical power & W'
+      new Chart(addCanvas(), {
+        data: {
+          labels: d.months,
+          datasets: [
+            line('CP (≈FTP) W', d.cp, '#2a9d4e', { yAxisID: 'watts' }),
+            medianDataset('CP W', d.cp, '#2a9d4e', 'watts'),
+            ghostDataset('CP W', d.cpPrev, '#2a9d4e', 'watts'),
+            line("W' kJ", d.wPrime, '#367aeb', { yAxisID: 'kj' }),
+            medianDataset("W' kJ", d.wPrime, '#367aeb', 'kj')
+          ]
+        },
+        options: {
+          plugins: { title: { display: true, text: 'Critical power (trailing 90 days)', font: { size: 16 } }, legend: sortByIndex },
+          scales: {
+            watts: { position: 'left', title: { display: true, text: 'CP watts' } },
+            kj: { position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: "W' kJ" } }
+          }
+        }
+      });
+
+      // 3. Durability — one chart per window; medians over long rides, with
+      // the count of rides reaching the first kJ mark as context bars.
+      Object.entries(d.durability).forEach(([label, dur]) => {
+        new Chart(addCanvas(), {
+          data: {
+            labels: d.months,
+            datasets: [
+              {
+                type: 'bar', label: 'rides ≥' + d.firstKj + ' kJ', data: dur.nLong,
+                backgroundColor: 'rgba(54, 122, 235, 0.35)', yAxisID: 'count', order: 2
+              },
+              line('median fresh ' + label + ' W', dur.medFresh, '#2a9d4e', { yAxisID: 'watts' }),
+              medianDataset('median fresh', dur.medFresh, '#2a9d4e', 'watts'),
+              ghostDataset('median fresh', dur.medFreshPrev, '#2a9d4e', 'watts'),
+              line('median after 1500 kJ', dur.medAfter['1500'], '#e8833a', { yAxisID: 'watts' }),
+              medianDataset('median after 1500 kJ', dur.medAfter['1500'], '#e8833a', 'watts'),
+              ghostDataset('median after 1500 kJ', dur.medAfterPrev['1500'], '#e8833a', 'watts'),
+              line('median after 2500 kJ', dur.medAfter['2500'], '#c44', { yAxisID: 'watts' }),
+              medianDataset('median after 2500 kJ', dur.medAfter['2500'], '#c44', 'watts')
+            ]
+          },
+          options: {
+            plugins: { title: { display: true, text: 'Durability — median best ' + label + ' power on long rides, fresh vs fatigued', font: { size: 16 } }, legend: sortByIndex },
+            scales: {
+              watts: { position: 'left', title: { display: true, text: 'watts' } },
+              count: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false },
+                       title: { display: true, text: 'rides' }, ticks: { precision: 0 } }
+            }
+          }
+        });
+      });
+
+      // 4. Early punch — best efforts inside the first 30 minutes. Best
+      // lines visible; medians hidden by default (toggle via legend) since
+      // they mostly track easy-ride starts.
+      new Chart(addCanvas(), {
+        data: {
+          labels: d.months,
+          datasets: Object.entries(d.early).flatMap(([label, e], i) => {
+            const color = ['#2a9d4e', '#e8833a', '#367aeb'][i];
+            return [
+              line('best early ' + label + ' W', e.max, color),
+              medianDataset('best early ' + label, e.max, color),
+              ghostDataset('best early ' + label, e.maxPrev, color),
+              line('median early ' + label + ' W', e.med, color,
+                   { hidden: true, borderWidth: 1.5, pointRadius: 2 })
+            ];
+          })
+        },
+        options: {
+          plugins: { title: { display: true, text: 'Early punch — best efforts in the first 30 minutes', font: { size: 16 } }, legend: sortByIndex },
+          scales: { y: { title: { display: true, text: 'watts' } } }
+        }
+      });
+
+      // 5. Race days — each metric as a percentile of the training rides
+      // (>=90 min, preceding 12 months). 50 = a typical hard training day,
+      // 100 = better than every training ride.
+      if (races.labels.length) {
+        new Chart(addCanvas(), {
+          type: 'bar',
+          data: {
+            labels: races.labels,
+            datasets: Object.entries(races.metrics).map(([label, values], i) => ({
+              label, data: values,
+              backgroundColor: ['#2a9d4e', '#7bc96f', '#e8833a', '#f2b134', '#c44', '#367aeb'][i]
+            }))
+          },
+          options: {
+            plugins: { title: { display: true, text: 'Race days vs training rides (percentile, higher = race exceeded more of training)', font: { size: 16 } } },
+            scales: { y: { min: 0, max: 100, title: { display: true, text: 'percentile of training rides' } } }
+          }
+        });
+      }
+
+      // 6. 40/20 interval sessions — rep power and within-session fade
+      if (intervals.labels.length) {
+        new Chart(addCanvas(), {
+          data: {
+            labels: intervals.labels,
+            datasets: [
+              line('best rep W', intervals.bestW, '#2a9d4e'),
+              line('mean rep W', intervals.meanW, '#e8833a'),
+              { type: 'bar', label: 'fade W (last − first set)', data: intervals.fadeW,
+                backgroundColor: intervals.fadeW.map(v => v >= 0 ? 'rgba(42,157,78,0.45)' : 'rgba(204,68,68,0.55)'),
+                yAxisID: 'fade', order: 3 }
+            ]
+          },
+          options: {
+            plugins: { title: { display: true, text: '40/20 VO2 sessions — rep power and within-session fade', font: { size: 16 } }, legend: sortByIndex },
+            scales: {
+              y: { position: 'left', title: { display: true, text: 'rep watts' } },
+              fade: { position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'fade W (+ = finished stronger)' } }
+            }
+          }
+        });
+      }
+
+      // 7. Aerobic efficiency
+      new Chart(addCanvas(), {
+        data: {
+          labels: d.months,
+          datasets: [
+            line('EF (NP/HR)', d.ef, '#2a9d4e', { yAxisID: 'ef' }),
+            medianDataset('EF', d.ef, '#2a9d4e', 'ef'),
+            ghostDataset('EF', d.efPrev, '#2a9d4e', 'ef'),
+            line('drift %', d.drift, '#e8833a', { yAxisID: 'pct' }),
+            medianDataset('drift %', d.drift, '#e8833a', 'pct')
+          ]
+        },
+        options: {
+          plugins: { title: { display: true, text: 'Aerobic efficiency on steady rides (higher EF, lower drift = better)', font: { size: 16 } }, legend: sortByIndex },
+          scales: {
+            ef: { position: 'left', title: { display: true, text: 'EF (W per bpm)' } },
+            pct: { position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'drift %' } }
+          }
+        }
+      });
+    </script>
+  </body>
+  </html>
+HTML
+
+File.write(options[:output], html)
+puts "Wrote #{options[:output]} (#{(File.size(options[:output]) / 1024.0).round}KB)"
+
+if options[:snapshot]
+  date = options[:snapshot] == true ? Date.today.iso8601 : options[:snapshot]
+  abort "snapshot date must be YYYY-MM-DD, got #{date}" unless date =~ /\A\d{4}-\d{2}-\d{2}\z/
+  dir = File.expand_path('../reports', __dir__)
+  Dir.mkdir(dir) unless Dir.exist?(dir)
+  snapshot = File.join(dir, "fitness-#{date}.html")
+  File.write(snapshot, html)
+  puts "Snapshot saved to #{snapshot} (commit it to keep the baseline)"
+end
+
+system('open', options[:output]) if options[:open] && RUBY_PLATFORM.include?('darwin')

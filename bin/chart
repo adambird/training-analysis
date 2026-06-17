@@ -1,0 +1,312 @@
+#!/usr/bin/env ruby
+# Renders a self-contained, shareable HTML report from a rides.csv produced
+# by bin/analyze: interactive monthly trend charts (Chart.js inlined from
+# vendor/, so the file works offline), monthly summary tables, methodology
+# notes, and per-ride detail.
+require 'csv'
+require 'json'
+require 'optparse'
+
+options = { input: 'rides.csv', output: nil, open: true, months: nil, exclude: [], title: nil }
+OptionParser.new do |o|
+  o.banner = 'Usage: bin/chart [options]'
+  o.on('--input FILE', 'Per-ride CSV from bin/analyze (default rides.csv)') { |v| options[:input] = v }
+  o.on('--output FILE', 'HTML file to write (default derived from parameters)') { |v| options[:output] = v }
+  o.on('--title TITLE', 'Report title (default derived from parameters)') { |v| options[:title] = v }
+  o.on('--months N', Integer, 'Only chart the most recent N months') { |v| options[:months] = v }
+  o.on('--exclude YYYY-MM', 'Exclude a month (e.g. a partial one), repeatable') { |v| options[:exclude] << v }
+  o.on('--no-open', 'Do not open the report in the browser') { options[:open] = false }
+end.parse!
+
+abort "#{options[:input]} not found — run bin/analyze --csv #{options[:input]} first" unless File.exist?(options[:input])
+raw = File.read(options[:input])
+# Leading "# key=value" comment lines carry the generation parameters
+params = raw.each_line.take_while { |l| l.start_with?('#') }
+            .flat_map { |l| l.scan(/(\w+)=(\S+)/) }.to_h
+rows = CSV.parse(raw.lines.reject { |l| l.start_with?('#') }.join, headers: true)
+abort "#{options[:input]} is empty" if rows.empty?
+
+# Recover the window/threshold specs from headers like efforts_1min_over_300w
+windows = rows.headers.filter_map { |h| h&.match(/\Aefforts_(\d+)min_over_(\d+)w\z/) }
+              .map { |m| { minutes: m[1].to_i, threshold: m[2].to_i } }
+abort 'no effort columns found in CSV' if windows.empty?
+
+# From the params comment if present, else inferred from the shortest ride
+min_duration = (params['min_duration_min'] || rows.map { |r| r['duration_min'].to_f }.min.floor).to_i
+
+# Stats are computed for every month in the CSV (not just the charted
+# window) so each chart can show a year-ago ghost line for context.
+all_by_month = rows.group_by { |r| r['date'][0, 7] }.sort.to_h
+
+stats = all_by_month.transform_values do |rides|
+  nps = rides.map { |r| r['np_w'].to_f }
+  hours = rides.sum { |r| r['duration_min'].to_f } / 60.0
+  per_window = windows.to_h do |w|
+    m = w[:minutes]
+    efforts = rides.sum { |r| r["efforts_#{m}min_over_#{w[:threshold]}w"].to_i }
+    weighted = rides.sum { |r| r["efforts_#{m}min_over_#{w[:threshold]}w"].to_i * r["mean_effort_#{m}min_w"].to_f }
+    [m, {
+      efforts: efforts,
+      efforts_per_hour: (efforts / hours).round(2),
+      mean_effort_w: efforts.zero? ? nil : (weighted / efforts).round(1),
+      best_w: rides.map { |r| r["best_#{m}min_avg_w"].to_f }.max.round(1)
+    }]
+  end
+  { rides: rides.size, hours: hours.round(1),
+    mean_np_w: (nps.sum / nps.size).round(1), best_np_w: nps.max.round(1),
+    windows: per_window }
+end
+
+charted = all_by_month.keys - options[:exclude]
+charted = charted.last(options[:months]) if options[:months]
+abort 'no months left after filtering' if charted.empty?
+months = charted
+by_month = all_by_month.slice(*charted)
+included_rides = by_month.values.reduce([], :+)
+month_labels = charted.map { |m| "#{m} (#{stats[m][:rides]})" }
+
+require 'date'
+prev_year = ->(month) { (Date.parse("#{month}-01") << 12).strftime('%Y-%m') }
+series = ->(&getter) { charted.map { |m| getter.(stats[m]) } }
+ghost = ->(&getter) { charted.map { |m| (s = stats[prev_year.(m)]) && getter.(s) } }
+
+np_json = JSON.generate(
+  meanNpW: series.() { |s| s[:mean_np_w] }, meanNpWPrev: ghost.() { |s| s[:mean_np_w] },
+  bestNpW: series.() { |s| s[:best_np_w] }, bestNpWPrev: ghost.() { |s| s[:best_np_w] }
+)
+
+charts_json = JSON.generate(windows.map do |w|
+  m = w[:minutes]
+  {
+    title: "#{m}min efforts over #{w[:threshold]}W",
+    threshold: w[:threshold],
+    effortsPerHour: series.() { |s| s[:windows][m][:efforts_per_hour] },
+    effortsPerHourPrev: ghost.() { |s| s[:windows][m][:efforts_per_hour] },
+    meanEffortW: series.() { |s| s[:windows][m][:mean_effort_w] },
+    bestW: series.() { |s| s[:windows][m][:best_w] },
+    bestWPrev: ghost.() { |s| s[:windows][m][:best_w] }
+  }
+end)
+
+def table(headers, body_rows)
+  head = headers.map { |h| "<th>#{h}</th>" }.join
+  body = body_rows.map { |r| "<tr>#{r.map { |c| "<td>#{c.nil? ? '–' : c}</td>" }.join}</tr>" }.join("\n")
+  "<table><thead><tr>#{head}</tr></thead><tbody>#{body}</tbody></table>"
+end
+
+np_table = table(
+  %w[month rides hours mean\ NP\ W best\ NP\ W],
+  months.map { |m| s = stats[m]; [m, s[:rides], s[:hours], s[:mean_np_w], s[:best_np_w]] }
+)
+
+window_sections = windows.map do |w|
+  monthly_table = table(
+    ['month', 'efforts', 'efforts/hr', 'mean effort W', 'best W'],
+    months.map do |m|
+      s = stats[m][:windows][w[:minutes]]
+      [m, s[:efforts], s[:efforts_per_hour], s[:mean_effort_w], s[:best_w]]
+    end
+  )
+  <<~HTML
+    <details><summary>Monthly numbers — #{w[:minutes]}min over #{w[:threshold]}W</summary>
+    #{monthly_table}</details>
+  HTML
+end
+
+ride_headers = ['date', 'duration min', 'moving min', 'avg W', 'NP W'] +
+               windows.flat_map { |w| ["best #{w[:minutes]}min W", "#{w[:minutes]}min efforts", 'mean effort W'] }
+ride_rows = included_rides.sort_by { |r| r['date'] }.map do |r|
+  [r['date'], r['duration_min'], r['moving_min'], r['avg_w'], r['np_w']] +
+    windows.flat_map { |w|
+      m = w[:minutes]
+      [r["best_#{m}min_avg_w"], r["efforts_#{m}min_over_#{w[:threshold]}w"], r["mean_effort_#{m}min_w"]]
+    }
+end
+
+chart_js = File.read(File.expand_path('../vendor/chart.umd.min.js', __dir__))
+
+# Derive title and filename from the generation parameters so multiple
+# versions are distinguishable side by side (browser tab and on disk).
+windows_label = windows.map { |w| "#{w[:minutes]}min@#{w[:threshold]}W" }.join(', ')
+duration_label = min_duration.positive? ? "rides ≥ #{min_duration} min" : 'all rides'
+scope = options[:months] ? "trailing #{options[:months]} months" : 'all months'
+scope += " excl. #{options[:exclude].join(', ')}" unless options[:exclude].empty?
+options[:title] ||= "Training power trends — #{duration_label}, #{windows_label}, #{scope}"
+options[:output] ||= ['report', min_duration.positive? ? "#{min_duration}min" : 'allrides',
+                      *windows.map { |w| "#{w[:minutes]}m#{w[:threshold]}w" },
+                      options[:months] && "#{options[:months]}mo",
+                      *options[:exclude].map { |m| "excl#{m}" }].compact.join('-') + '.html'
+
+subtitle = "#{included_rides.size} rides, #{months.first} to #{months.last}" \
+           " &mdash; generated #{Time.now.strftime('%-d %b %Y')}"
+
+html = <<~HTML
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <meta charset="utf-8">
+    <title>#{options[:title]}</title>
+    <script>#{chart_js}</script>
+    <style>
+      body { font-family: -apple-system, sans-serif; max-width: 1000px; margin: 2rem auto; color: #222; padding: 0 1rem; }
+      h1 { font-size: 1.5rem; margin-bottom: 0.2rem; }
+      .subtitle { color: #666; margin-bottom: 2rem; }
+      .chart { margin: 2.5rem 0 0.5rem; }
+      details { margin: 0.5rem 0 2rem; }
+      summary { cursor: pointer; color: #555; font-size: 0.9rem; }
+      table { border-collapse: collapse; margin-top: 0.6rem; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+      th, td { padding: 0.25rem 0.7rem; text-align: right; border-bottom: 1px solid #e3e3e3; }
+      th:first-child, td:first-child { text-align: left; }
+      thead th { border-bottom: 2px solid #999; }
+      .methodology { font-size: 0.85rem; color: #555; border-top: 1px solid #ddd; margin-top: 2.5rem; padding-top: 1rem; }
+      .methodology ul { padding-left: 1.2rem; }
+    </style>
+  </head>
+  <body>
+    <h1>#{options[:title]}</h1>
+    <p class="subtitle">#{subtitle}</p>
+    <p>Bars and lines show monthly values. Faint dotted lines show the same month
+       one year earlier (seasonality-free comparison); dashed 3-month rolling
+       medians are hidden by default &mdash; click any legend entry to toggle.
+       Month labels show the number of qualifying rides in brackets.</p>
+    <div id="charts"></div>
+    <div id="tables">
+      <details><summary>Monthly numbers — whole-ride NP</summary>#{np_table}</details>
+      #{window_sections.join("\n")}
+      <details><summary>Per-ride detail (#{included_rides.size} rides)</summary>
+      #{table(ride_headers, ride_rows)}</details>
+    </div>
+    <div class="methodology">
+      <strong>How these numbers are produced</strong>
+      <ul>
+        <li>Source: FIT/TCX/GPX files, resolved to a 1Hz power series per ride.</li>
+        <li><strong>Efforts</strong>: non-overlapping windows (e.g. 1 min) whose average power meets the
+            threshold, scanned over elapsed time with recording gaps as 0W &mdash; an effort can never span
+            a pause. A sustained block counts once per window length.</li>
+        <li><strong>Efforts/hr</strong> normalises for ride length so long and short rides compare fairly.</li>
+        <li><strong>Mean effort W</strong> is the average power of the qualifying efforts (sits just above
+            the threshold by construction; the count and best are the progression signals).</li>
+        <li><strong>Best W</strong> is the highest rolling average for the window that month.</li>
+        <li><strong>Normalised power</strong> (Coggan: 30s smoothing, 4th-power mean) is whole-ride only,
+            computed over moving time to match Strava/Garmin/TrainingPeaks.</li>
+      </ul>
+    </div>
+    <script>
+      const months = #{JSON.generate(month_labels)};
+      const np = #{np_json};
+      const charts = #{charts_json};
+
+      // Centred 3-month rolling median: shows the trajectory without
+      // imposing a straight line on seasonal data, and is robust to
+      // single-month outliers. Toggle via the legend.
+      function rollingMedian(values) {
+        return values.map((_, i) => {
+          const win = values.slice(Math.max(0, i - 1), i + 2).filter(v => v != null);
+          if (!win.length) return null;
+          win.sort((a, b) => a - b);
+          const m = Math.floor(win.length / 2);
+          return win.length % 2 ? win[m] : +((win[m - 1] + win[m]) / 2).toFixed(2);
+        });
+      }
+
+      function medianDataset(label, values, color, axis) {
+        return {
+          type: 'line', label: label + ' 3mo median', data: rollingMedian(values),
+          borderColor: color, borderDash: [6, 4], borderWidth: 1.5,
+          pointRadius: 0, yAxisID: axis, hidden: true, spanGaps: true
+        };
+      }
+
+      // Same month one year earlier — removes seasonality by construction.
+      function ghostDataset(label, values, color, axis) {
+        return {
+          type: 'line', label: label + ' (yr ago)', data: values,
+          borderColor: color + '59', backgroundColor: color + '59',
+          borderWidth: 1.5, borderDash: [2, 3], pointRadius: 0,
+          yAxisID: axis, spanGaps: true
+        };
+      }
+
+      function addCanvas() {
+        const div = document.createElement('div');
+        div.className = 'chart';
+        const canvas = document.createElement('canvas');
+        div.appendChild(canvas);
+        document.getElementById('charts').appendChild(div);
+        return canvas;
+      }
+
+      // Whole-ride normalised power (moving time)
+      new Chart(addCanvas(), {
+        type: 'line',
+        data: {
+          labels: months,
+          datasets: [
+            { label: 'best ride NP W', data: np.bestNpW,
+              borderColor: '#2a9d4e', backgroundColor: '#2a9d4e', tension: 0.3 },
+            medianDataset('best ride NP W', np.bestNpW, '#2a9d4e'),
+            ghostDataset('best ride NP W', np.bestNpWPrev, '#2a9d4e'),
+            { label: 'mean ride NP W', data: np.meanNpW,
+              borderColor: '#e8833a', backgroundColor: '#e8833a', tension: 0.3 },
+            medianDataset('mean ride NP W', np.meanNpW, '#e8833a'),
+            ghostDataset('mean ride NP W', np.meanNpWPrev, '#e8833a')
+          ]
+        },
+        options: {
+          plugins: {
+            title: { display: true, text: 'Whole-ride normalised power (moving time)', font: { size: 16 } },
+            legend: { labels: { sort: (a, b) => a.datasetIndex - b.datasetIndex } }
+          },
+          scales: { y: { title: { display: true, text: 'watts' } } }
+        }
+      });
+
+      charts.forEach((c) => {
+        new Chart(addCanvas(), {
+          data: {
+            labels: months,
+            datasets: [
+              {
+                type: 'bar', label: 'efforts per hour', data: c.effortsPerHour,
+                backgroundColor: 'rgba(54, 122, 235, 0.4)', yAxisID: 'count', order: 2
+              },
+              medianDataset('efforts per hour', c.effortsPerHour, '#367aeb', 'count'),
+              ghostDataset('efforts per hour', c.effortsPerHourPrev, '#367aeb', 'count'),
+              {
+                type: 'line', label: 'mean effort W', data: c.meanEffortW,
+                borderColor: '#e8833a', backgroundColor: '#e8833a',
+                yAxisID: 'watts', tension: 0.3, spanGaps: true, order: 1
+              },
+              medianDataset('mean effort W', c.meanEffortW, '#e8833a', 'watts'),
+              {
+                type: 'line', label: 'best W', data: c.bestW,
+                borderColor: '#2a9d4e', backgroundColor: '#2a9d4e',
+                yAxisID: 'watts', tension: 0.3, order: 0
+              },
+              medianDataset('best W', c.bestW, '#2a9d4e', 'watts'),
+              ghostDataset('best W', c.bestWPrev, '#2a9d4e', 'watts')
+            ]
+          },
+          options: {
+            plugins: {
+              title: { display: true, text: c.title, font: { size: 16 } },
+              legend: { labels: { sort: (a, b) => a.datasetIndex - b.datasetIndex } }
+            },
+            scales: {
+              count: { position: 'left', beginAtZero: true,
+                       title: { display: true, text: 'efforts / hour' } },
+              watts: { position: 'right', grid: { drawOnChartArea: false },
+                       suggestedMin: c.threshold - 20,
+                       title: { display: true, text: 'watts' } }
+            }
+          }
+        });
+      });
+    </script>
+  </body>
+  </html>
+HTML
+
+File.write(options[:output], html)
+puts "Wrote #{options[:output]} (#{(File.size(options[:output]) / 1024.0).round}KB, #{months.size} months, #{windows.size} windows, #{included_rides.size} rides)"
+system('open', options[:output]) if options[:open] && RUBY_PLATFORM.include?('darwin')

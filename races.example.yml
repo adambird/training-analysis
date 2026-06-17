@@ -1,0 +1,13 @@
+# Copy to races.yml (gitignored) and list your races. Used by bin/fitness
+# (race-day analysis) and excluded from interval detection.
+#
+# The longest ride on each date is treated as the race; shorter same-day rides
+# are warm-ups. role: key = target race, prep = preparation race (optional).
+# name is optional but helpful in the report.
+races:
+  - date: 2026-04-25
+    name: Example Spring Gravel
+    role: prep
+  - date: 2026-09-12
+    name: Example Championship
+    role: key

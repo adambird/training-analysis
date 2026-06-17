@@ -1,0 +1,13 @@
+# Personal config and data — copy the .example files to create these
+config.yml
+races.yml
+
+# Generated outputs
+*.csv
+chart.html
+report*.html
+fitness*.html
+intervals.html
+
+# Dated report snapshots (personal training data)
+reports/

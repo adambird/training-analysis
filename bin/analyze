@@ -1,0 +1,85 @@
+#!/usr/bin/env ruby
+require 'optparse'
+require_relative '../lib/analyzer'
+require_relative '../lib/config'
+
+options = {
+  dir: Config.workout_dir,
+  min_duration: 120,
+  windows: { 60 => 300, 180 => 280, 300 => 260 },
+  csv: nil
+}
+
+OptionParser.new do |o|
+  o.banner = 'Usage: bin/analyze [options]'
+  o.on('--dir DIR', 'Directory of .fit/.tcx/.gpx files (gzipped ok)') { |v| options[:dir] = File.expand_path(v) }
+  o.on('--min-duration MINUTES', Integer, 'Only rides at least this long (default 120; 0 for all rides)') { |v| options[:min_duration] = v }
+  o.on('--window SPEC', 'window_seconds:threshold_watts, repeatable; replaces defaults',
+       'e.g. --window 60:300 --window 300:250') do |v|
+    options[:custom_windows] ||= {}
+    seconds, watts = v.split(':').map(&:to_i)
+    abort "bad --window spec: #{v}" if seconds <= 0 || watts <= 0
+    options[:custom_windows][seconds] = watts
+  end
+  o.on('--csv FILE', 'Write per-ride results to CSV') { |v| options[:csv] = v }
+end.parse!
+
+abort "Workout directory not found: #{options[:dir].inspect}. Set workout_dir in config.yml (copy config.example.yml) or pass --dir." unless options[:dir] && Dir.exist?(options[:dir])
+
+windows = options[:custom_windows] || options[:windows]
+analyzer = Analyzer.new(dir: options[:dir], min_duration_minutes: options[:min_duration], windows: windows)
+
+duration_label = options[:min_duration].positive? ? ">= #{options[:min_duration]} min" : '(any duration)'
+
+results = analyzer.results
+if results.empty?
+  puts "No rides #{duration_label} with power data found in #{options[:dir]}"
+  exit
+end
+
+puts "#{results.size} rides #{duration_label} with power data " \
+     "(#{results.first.activity.start_time.strftime('%Y-%m-%d')} to " \
+     "#{results.last.activity.start_time.strftime('%Y-%m-%d')})"
+
+t0 = results.first.activity.start_time
+day = ->(r) { (r.activity.start_time - t0) / 86_400.0 }
+fmt = ->(slope, unit) { slope ? format('%+.2f %s', slope * 30, unit) : 'n/a' }
+
+puts "\n== Whole-ride normalised power (moving time) =="
+puts format('%-9s %6s %10s %10s', 'month', 'rides', 'mean NP W', 'best NP W')
+analyzer.monthly_np_summary.each do |month, s|
+  puts format('%-9s %6d %10.1f %10.1f', month, s[:rides], s[:mean_np_w], s[:best_np_w])
+end
+np_slope = Analyzer.trend_slope(results.map { |r| [day.(r), r.activity.normalised_power] })
+puts "trend/30 days:  NP #{fmt.(np_slope, 'W')}"
+
+windows.each do |window, threshold|
+  minutes = window / 60.0
+  label = minutes == minutes.to_i ? "#{minutes.to_i}min" : "#{window}s"
+  puts "\n== #{label} efforts over #{threshold}W =="
+  puts format('%-9s %6s %8s %13s %11s %15s %10s', 'month', 'rides', 'efforts', 'efforts/ride', 'efforts/hr', 'mean effort W', 'best W')
+
+  summary = analyzer.monthly_summary[window]
+  summary.each do |month, s|
+    puts format('%-9s %6d %8d %13.1f %11.2f %15s %10s',
+                month, s[:rides], s[:efforts], s[:efforts_per_ride], s[:efforts_per_hour],
+                s[:mean_effort_w] ? s[:mean_effort_w].round(1) : '-',
+                s[:best_w] ? s[:best_w].round(1) : '-')
+  end
+
+  # Trends, fitted per ride against days elapsed
+  with_window = results.map { |r| [r, r.window_results.find { |wr| wr.window == window }] }
+
+  count_slope = Analyzer.trend_slope(with_window.map { |r, wr| [day.(r), wr.effort_count / (r.activity.duration_seconds / 3600.0)] })
+  best_slope = Analyzer.trend_slope(with_window.map { |r, wr| [day.(r), wr.best_mean] }.reject { |_, y| y.nil? })
+  effort_points = with_window.filter_map { |r, wr| wr.mean_effort_power && [day.(r), wr.mean_effort_power] }
+  effort_slope = Analyzer.trend_slope(effort_points)
+
+  puts "trend/30 days:  efforts #{fmt.(count_slope, 'per hour')}, " \
+       "mean effort #{fmt.(effort_slope, 'W')}, best #{label} #{fmt.(best_slope, 'W')}"
+end
+
+if options[:csv]
+  File.open(options[:csv], 'w') { |f| analyzer.write_csv(f) }
+  puts "\nPer-ride detail written to #{options[:csv]}"
+end

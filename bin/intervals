@@ -1,0 +1,208 @@
+#!/usr/bin/env ruby
+# Interval-session report. Detects interval sessions by power signature
+# (there is no workout label in the exported files) and classifies each by
+# rep length — 40/20, ~1min, ~2min hill reps, ~5min, etc. Tracks execution
+# per type over time: mean and best rep power, within-session fade, volume.
+# Renders a self-contained HTML report (Chart.js inlined from vendor/).
+require 'optparse'
+require 'json'
+require 'csv'
+require 'date'
+require 'yaml'
+require_relative '../lib/activity'
+require_relative '../lib/intervals'
+require_relative '../lib/config'
+
+options = {
+  dir: Config.workout_dir,
+  races: nil, min_chart: 3, csv: nil, output: nil, open: true, snapshot: false
+}
+OptionParser.new do |o|
+  o.banner = 'Usage: bin/intervals [options]'
+  o.on('--dir DIR', 'Directory of workout files') { |v| options[:dir] = File.expand_path(v) }
+  o.on('--races FILE', 'Race days YAML to exclude (default races.yml)') { |v| options[:races] = v }
+  o.on('--min-chart N', Integer, 'Min sessions for a type to get its own chart (default 3)') { |v| options[:min_chart] = v }
+  o.on('--csv FILE', 'Write per-session summary to CSV') { |v| options[:csv] = v }
+  o.on('--output FILE', 'HTML file to write (default intervals.html)') { |v| options[:output] = v }
+  o.on('--snapshot [DATE]', 'Also save a dated copy under reports/') { |v| options[:snapshot] = v || true }
+  o.on('--no-open', 'Do not open the report in the browser') { options[:open] = false }
+end.parse!
+
+abort "Workout directory not found: #{options[:dir].inspect}. Set workout_dir in config.yml (copy config.example.yml) or pass --dir." unless options[:dir] && Dir.exist?(options[:dir])
+
+# Race days are excluded — a race's repeated surges look like an interval set.
+races_path = options[:races] || File.expand_path('../races.yml', __dir__)
+race_days = []
+if File.exist?(races_path)
+  race_days = (YAML.safe_load_file(races_path, permitted_classes: [Date])['races'] || [])
+              .map { |r| r['date'].is_a?(Date) ? r['date'] : Date.parse(r['date'].to_s) }
+end
+
+paths = Dir.children(options[:dir])
+           .select { |f| f =~ /\.(fit|tcx|gpx)(\.gz)?\z/i }
+           .map { |f| File.join(options[:dir], f) }.sort
+
+sessions = paths.filter_map do |p|
+  a = Activity.load(p) or next
+  next if race_days.include?(a.start_time.to_date)
+
+  Intervals.detect(a, ftp: Config.ftp)
+end.uniq { |s| s.start_time.to_i }.sort_by(&:start_time)
+abort "No interval sessions detected in #{options[:dir]}" if sessions.empty?
+
+# Order types by frequency; types with enough sessions get a trend chart.
+types = sessions.group_by(&:type).transform_values { |ss| ss.sort_by(&:start_time) }
+ordered_types = types.sort_by { |_, ss| -ss.size }.map(&:first)
+chart_types = ordered_types.select { |t| types[t].size >= options[:min_chart] }
+
+warn "#{sessions.size} interval sessions across #{types.size} types " \
+     "(#{sessions.first.start_time.strftime('%Y-%m-%d')} to #{sessions.last.start_time.strftime('%Y-%m-%d')})"
+ordered_types.each { |t| warn "  #{t}: #{types[t].size}" }
+
+if options[:csv]
+  CSV.open(options[:csv], 'w') do |csv|
+    csv << %w[date type reps sets rep_seconds recovery_seconds mean_w best_w fade_w structured set_avgs]
+    sessions.each do |s|
+      csv << [s.start_time.strftime('%Y-%m-%d'), s.type, s.rep_count, s.set_count,
+              s.rep_seconds, s.recovery_seconds, s.mean_w, s.best_w, s.fade_w,
+              s.structured, s.set_avgs.join(' ')]
+    end
+  end
+  warn "Per-session summary written to #{options[:csv]}"
+end
+
+def table(headers, rows)
+  head = headers.map { |h| "<th>#{h}</th>" }.join
+  body = rows.map { |r| "<tr>#{r.map { |c| "<td>#{c.nil? ? '–' : c}</td>" }.join}</tr>" }.join("\n")
+  "<table><thead><tr>#{head}</tr></thead><tbody>#{body}</tbody></table>"
+end
+
+all_table = table(
+  ['date', 'type', 'reps', 'sets', 'rep s', 'rec s', 'mean W', 'best W', 'fade W', 'set averages', 'src'],
+  sessions.map do |s|
+    [s.start_time.strftime('%Y-%m-%d'), s.type, s.rep_count, s.sets.map(&:size).join('+'),
+     s.rep_seconds, s.recovery_seconds, s.mean_w, s.best_w,
+     s.fade_w ? format('%+d', s.fade_w) : nil, s.set_avgs.join(' → '), s.structured ? 'Zwift' : 'outdoor']
+  end
+)
+
+charts = chart_types.map do |type|
+  ss = types[type]
+  {
+    type: type,
+    labels: ss.map { |s| s.start_time.strftime('%Y-%m-%d') },
+    meanW: ss.map(&:mean_w),
+    bestW: ss.map(&:best_w)
+  }
+end
+
+chart_js = File.read(File.expand_path('../vendor/chart.umd.min.js', __dir__))
+options[:output] ||= 'intervals.html'
+title = 'Interval sessions by type'
+
+html = <<~HTML
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <meta charset="utf-8">
+    <title>#{title}</title>
+    <script>#{chart_js}</script>
+    <style>
+      body { font-family: -apple-system, sans-serif; max-width: 1000px; margin: 2rem auto; color: #222; padding: 0 1rem; }
+      h1 { font-size: 1.5rem; margin-bottom: 0.2rem; }
+      .subtitle { color: #666; margin-bottom: 2rem; }
+      .chart { margin: 2.5rem 0 0.5rem; }
+      details { margin: 0.5rem 0 2rem; }
+      summary { cursor: pointer; color: #555; font-size: 0.9rem; }
+      table { border-collapse: collapse; margin-top: 0.6rem; font-size: 0.82rem; font-variant-numeric: tabular-nums; }
+      th, td { padding: 0.25rem 0.6rem; text-align: right; border-bottom: 1px solid #e3e3e3; }
+      th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+      thead th { border-bottom: 2px solid #999; }
+      .methodology { font-size: 0.85rem; color: #555; border-top: 1px solid #ddd; margin-top: 2.5rem; padding-top: 1rem; }
+      .methodology ul { padding-left: 1.2rem; }
+    </style>
+  </head>
+  <body>
+    <h1>#{title}</h1>
+    <p class="subtitle">#{sessions.size} sessions, #{types.size} types, #{sessions.first.start_time.strftime('%Y-%m-%d')} to #{sessions.last.start_time.strftime('%Y-%m-%d')} &mdash; race days excluded &mdash; generated #{Time.now.strftime('%-d %b %Y')}</p>
+    <p>One point per session. A chart is shown for each type with at least
+       #{options[:min_chart]} sessions; the rest are in the table. Dashed
+       rolling medians are hidden by default &mdash; click a legend entry to toggle.</p>
+    <div id="charts"></div>
+    <div id="tables">
+      <details open><summary>All sessions</summary>#{all_table}</details>
+    </div>
+    <div class="methodology">
+      <strong>How sessions are found, measured, and classified</strong>
+      <ul>
+        <li>The files carry no workout name and the Zwift target-power field is unpopulated, so sessions
+            are detected by shape: efforts sustained above ~95% of CP, grouped into a <em>set</em> when
+            they are close in time and consistent in duration (this is what separates a deliberate set
+            from incidental hard efforts in a long ride). Works for outdoor sets (e.g. 2-min hill reps
+            with long descent recoveries) as well as indoor ERG work.</li>
+        <li><strong>Type</strong> is the rep length: 40/20 (short rep + short recovery), then ~1/2/5-min
+            reps. <strong>Rep power</strong> is the trimmed-centre mean of each effort; leading warm-up
+            ramp reps are dropped. <strong>Fade</strong> = last set − first set average (multi-set only).</li>
+        <li>Race days (from races.yml) are excluded. Detection is by shape, not label, so single-set
+            outdoor detections may occasionally be incidental rather than a planned workout.</li>
+      </ul>
+    </div>
+    <script>
+      const charts = #{JSON.generate(charts)};
+
+      function rollingMedian(values) {
+        return values.map((_, i) => {
+          const win = values.slice(Math.max(0, i - 1), i + 2).filter(v => v != null);
+          if (!win.length) return null;
+          win.sort((a, b) => a - b);
+          const m = Math.floor(win.length / 2);
+          return win.length % 2 ? win[m] : +((win[m - 1] + win[m]) / 2).toFixed(1);
+        });
+      }
+      function medianDataset(label, values, color) {
+        return { type: 'line', label: label + ' rolling median', data: rollingMedian(values),
+          borderColor: color, borderDash: [6, 4], borderWidth: 1.5, pointRadius: 0,
+          hidden: true, spanGaps: true };
+      }
+      const sortByIndex = { labels: { sort: (a, b) => a.datasetIndex - b.datasetIndex } };
+      const line = (label, data, color) => ({ type: 'line', label, data,
+        borderColor: color, backgroundColor: color, tension: 0.3, spanGaps: true });
+
+      charts.forEach(c => {
+        const div = document.createElement('div');
+        div.className = 'chart';
+        const canvas = document.createElement('canvas');
+        div.appendChild(canvas);
+        document.getElementById('charts').appendChild(div);
+        new Chart(canvas, {
+          data: { labels: c.labels, datasets: [
+            line('best rep W', c.bestW, '#2a9d4e'),
+            medianDataset('best rep W', c.bestW, '#2a9d4e'),
+            line('mean rep W', c.meanW, '#e8833a'),
+            medianDataset('mean rep W', c.meanW, '#e8833a')
+          ] },
+          options: {
+            plugins: { title: { display: true, text: c.type + ' — rep power per session', font: { size: 16 } }, legend: sortByIndex },
+            scales: { y: { title: { display: true, text: 'watts' } } }
+          }
+        });
+      });
+    </script>
+  </body>
+  </html>
+HTML
+
+File.write(options[:output], html)
+puts "Wrote #{options[:output]} (#{(File.size(options[:output]) / 1024.0).round}KB, #{sessions.size} sessions, #{chart_types.size} charted types)"
+
+if options[:snapshot]
+  date = options[:snapshot] == true ? Date.today.iso8601 : options[:snapshot]
+  abort "snapshot date must be YYYY-MM-DD, got #{date}" unless date =~ /\A\d{4}-\d{2}-\d{2}\z/
+  dir = File.expand_path('../reports', __dir__)
+  Dir.mkdir(dir) unless Dir.exist?(dir)
+  snap = File.join(dir, "intervals-#{date}.html")
+  File.write(snap, html)
+  puts "Snapshot saved to #{snap} (commit it to keep the baseline)"
+end
+
+system('open', options[:output]) if options[:open] && RUBY_PLATFORM.include?('darwin')
