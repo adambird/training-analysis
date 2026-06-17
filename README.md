@@ -29,7 +29,7 @@ bundle exec bin/analyze
 # Custom windows/thresholds and per-ride CSV output
 bundle exec bin/analyze --min-duration 90 \
   --window 60:320 --window 300:250 \
-  --csv rides.csv
+  --csv data/rides.csv
 ```
 
 The terminal report shows, per window, a monthly summary (rides, qualifying
@@ -40,7 +40,7 @@ detail.
 ## Shareable report
 
 ```sh
-bundle exec bin/analyze --min-duration 90 --csv rides.csv
+bundle exec bin/analyze --min-duration 90 --csv data/rides.csv
 bundle exec bin/chart --months 12 --title "Training Power Trends"
 ```
 
@@ -54,7 +54,7 @@ drops partial months that would skew trendlines.
 ## Fitness progression
 
 ```sh
-bundle exec bin/fitness --months 24 --csv fitness.csv
+bundle exec bin/fitness --months 24 --csv data/fitness.csv
 ```
 
 Add `--snapshot` to also save a dated copy under `reports/` (default today, or
@@ -70,7 +70,7 @@ FIT sport field — Garmin watches record running power in the same field.
 ## Interval sessions
 
 ```sh
-bundle exec bin/intervals --csv intervals.csv
+bundle exec bin/intervals --csv data/intervals.csv
 ```
 
 Discovers interval sessions by power signature and classifies each by rep

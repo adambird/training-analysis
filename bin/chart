@@ -7,10 +7,10 @@ require 'csv'
 require 'json'
 require 'optparse'
 
-options = { input: 'rides.csv', output: nil, open: true, months: nil, exclude: [], title: nil }
+options = { input: 'data/rides.csv', output: nil, open: true, months: nil, exclude: [], title: nil }
 OptionParser.new do |o|
   o.banner = 'Usage: bin/chart [options]'
-  o.on('--input FILE', 'Per-ride CSV from bin/analyze (default rides.csv)') { |v| options[:input] = v }
+  o.on('--input FILE', 'Per-ride CSV from bin/analyze (default data/rides.csv)') { |v| options[:input] = v }
   o.on('--output FILE', 'HTML file to write (default derived from parameters)') { |v| options[:output] = v }
   o.on('--title TITLE', 'Report title (default derived from parameters)') { |v| options[:title] = v }
   o.on('--months N', Integer, 'Only chart the most recent N months') { |v| options[:months] = v }
