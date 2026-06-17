@@ -97,7 +97,7 @@ charts = chart_types.map do |type|
 end
 
 chart_js = File.read(File.expand_path('../vendor/chart.umd.min.js', __dir__))
-options[:output] ||= 'intervals.html'
+options[:output] ||= 'reports/intervals.html'
 title = 'Interval sessions by type'
 
 html = <<~HTML
@@ -192,6 +192,8 @@ html = <<~HTML
   </html>
 HTML
 
+require 'fileutils'
+FileUtils.mkdir_p(File.dirname(options[:output]))
 File.write(options[:output], html)
 puts "Wrote #{options[:output]} (#{(File.size(options[:output]) / 1024.0).round}KB, #{sessions.size} sessions, #{chart_types.size} charted types)"
 

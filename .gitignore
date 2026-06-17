@@ -1,13 +1,11 @@
-# Personal config and data — copy the .example files to create these
+# Personal config — copy the .example files to create these
 config.yml
 races.yml
 
-# Generated outputs
-*.csv
-chart.html
-report*.html
-fitness*.html
-intervals.html
+# Generated CSVs (bin/analyze, bin/fitness, bin/intervals)
+data/*
+!data/.gitkeep
 
-# Dated report snapshots (personal training data)
-reports/
+# Generated HTML reports and dated snapshots (personal training data)
+reports/*
+!reports/.gitkeep

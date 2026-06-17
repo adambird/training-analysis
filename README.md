@@ -44,7 +44,7 @@ bundle exec bin/analyze --min-duration 90 --csv data/rides.csv
 bundle exec bin/chart --months 12 --title "Training Power Trends"
 ```
 
-`bin/chart` renders the CSV into `report.html` — a single self-contained file
+`bin/chart` renders the CSV into a self-contained HTML report under `reports/`
 (Chart.js inlined from `vendor/`, works offline) with interactive monthly
 trend charts (toggleable trendlines via the legend), collapsible monthly
 summary tables, per-ride detail, and methodology notes. Email or AirDrop it
@@ -82,7 +82,7 @@ incidental hard efforts in a long ride, and finds outdoor sets (e.g. 2-min hill
 reps with long descent recoveries) as well as indoor ERG work. Race days
 (`races.yml`) are excluded.
 
-`intervals.html` shows a rep-power trend chart per type (mean/best, with rolling
+`reports/intervals.html` shows a rep-power trend chart per type (mean/best, with rolling
 median) plus a full session table. The `bin/fitness` report carries a focused
 40/20 chart and lists every interval type found.
 

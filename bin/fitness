@@ -318,7 +318,7 @@ chart_js = File.read(File.expand_path('../vendor/chart.umd.min.js', __dir__))
 scope = "#{options[:months]}mo trends, #{options[:compare]}mo power-curve compare"
 scope += " excl. #{options[:exclude].join(', ')}" unless options[:exclude].empty?
 title = "Fitness progression — #{scope}"
-options[:output] ||= ['fitness', "#{options[:months]}mo", "cmp#{options[:compare]}",
+options[:output] ||= 'reports/' + ['fitness', "#{options[:months]}mo", "cmp#{options[:compare]}",
                       *options[:exclude].map { |m| "excl#{m}" }].join('-') + '.html'
 
 html = <<~HTML
@@ -604,6 +604,8 @@ html = <<~HTML
   </html>
 HTML
 
+require 'fileutils'
+FileUtils.mkdir_p(File.dirname(options[:output]))
 File.write(options[:output], html)
 puts "Wrote #{options[:output]} (#{(File.size(options[:output]) / 1024.0).round}KB)"
 

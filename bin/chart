@@ -132,10 +132,10 @@ duration_label = min_duration.positive? ? "rides ≥ #{min_duration} min" : 'all
 scope = options[:months] ? "trailing #{options[:months]} months" : 'all months'
 scope += " excl. #{options[:exclude].join(', ')}" unless options[:exclude].empty?
 options[:title] ||= "Training power trends — #{duration_label}, #{windows_label}, #{scope}"
-options[:output] ||= ['report', min_duration.positive? ? "#{min_duration}min" : 'allrides',
-                      *windows.map { |w| "#{w[:minutes]}m#{w[:threshold]}w" },
-                      options[:months] && "#{options[:months]}mo",
-                      *options[:exclude].map { |m| "excl#{m}" }].compact.join('-') + '.html'
+options[:output] ||= 'reports/' + ['report', min_duration.positive? ? "#{min_duration}min" : 'allrides',
+                                   *windows.map { |w| "#{w[:minutes]}m#{w[:threshold]}w" },
+                                   options[:months] && "#{options[:months]}mo",
+                                   *options[:exclude].map { |m| "excl#{m}" }].compact.join('-') + '.html'
 
 subtitle = "#{included_rides.size} rides, #{months.first} to #{months.last}" \
            " &mdash; generated #{Time.now.strftime('%-d %b %Y')}"
@@ -307,6 +307,8 @@ html = <<~HTML
   </html>
 HTML
 
+require 'fileutils'
+FileUtils.mkdir_p(File.dirname(options[:output]))
 File.write(options[:output], html)
 puts "Wrote #{options[:output]} (#{(File.size(options[:output]) / 1024.0).round}KB, #{months.size} months, #{windows.size} windows, #{included_rides.size} rides)"
 system('open', options[:output]) if options[:open] && RUBY_PLATFORM.include?('darwin')
