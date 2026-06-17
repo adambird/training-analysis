@@ -30,9 +30,19 @@ module Intervals
     def mean_w = (reps.sum.to_f / reps.size).round
     def best_w = reps.max
     def set_avgs = sets.map(&:avg)
-    # Last set minus first; positive = finished stronger, negative = faded.
-    # nil for a single-set session (no across-set fade to measure).
-    def fade_w = set_count < 2 ? nil : set_avgs.last - set_avgs.first
+
+    # Power change from start to end of the session: mean of the last third of
+    # reps minus the first third. Positive = finished stronger, negative =
+    # faded. Defined for single- and multi-set sessions alike; for evenly-split
+    # multi-set sessions the thirds line up with first/last set.
+    def fade_w
+      r = reps
+      return nil if r.size < 4
+
+      n = [r.size / 3, 1].max
+      ((r.last(n).sum.to_f / n) - (r.first(n).sum.to_f / n)).round
+    end
+
     def rep_seconds = Intervals.median(sets.flat_map(&:rep_seconds)).round
     def recovery_seconds = Intervals.median(sets.map(&:recovery_seconds).compact)&.round
 

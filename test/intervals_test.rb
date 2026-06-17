@@ -56,6 +56,16 @@ class IntervalsTest < Minitest::Test
     assert_equal 40, s.fade_w
   end
 
+  def test_single_set_session_still_has_fade
+    # one set of 6 reps that fades 380 -> 320; thirds: last(380? no) ...
+    p = Array.new(600, 150)
+    [380, 378, 360, 350, 330, 320].each { |w| p.concat(Array.new(40, w)).concat(Array.new(20, 100)) }
+    s = session(p)
+    assert_equal 1, s.set_count
+    refute_nil s.fade_w                 # defined despite single set
+    assert_operator s.fade_w, :<, 0     # faded
+  end
+
   def test_negative_fade_when_blowing_up
     p = Array.new(600, 150)
     [400, 360, 320].each do |w|

@@ -142,7 +142,8 @@ html = <<~HTML
             with long descent recoveries) as well as indoor ERG work.</li>
         <li><strong>Type</strong> is the rep length: 40/20 (short rep + short recovery), then ~1/2/5-min
             reps. <strong>Rep power</strong> is the trimmed-centre mean of each effort; leading warm-up
-            ramp reps are dropped. <strong>Fade</strong> = last set − first set average (multi-set only).</li>
+            ramp reps are dropped. <strong>Fade</strong> = mean of the last third of reps − the first third
+            (end vs start of the session); negative means faded.</li>
         <li>Race days (from races.yml) are excluded. Detection is by shape, not label, so single-set
             outdoor detections may occasionally be incidental rather than a planned workout.</li>
       </ul>

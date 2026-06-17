@@ -267,7 +267,7 @@ intervals_json = JSON.generate(
   labels: v40.map { |s| s.start_time.strftime('%Y-%m-%d') },
   meanW: v40.map(&:mean_w),
   bestW: v40.map(&:best_w),
-  fadeW: v40.map { |s| s.fade_w || 0 }
+  fadeW: v40.map(&:fade_w)
 )
 if interval_sessions.any?
   intervals_table = table(
@@ -384,8 +384,9 @@ html = <<~HTML
             usually mean the race didn't demand that quality (e.g. no early surges).</li>
         <li><strong>Interval sessions</strong>: detected by power signature (consistent efforts clustered
             in time) and classified by rep length, since the files carry no workout name. The chart tracks
-            40/20 VO2 sessions (mean/best rep power, and fade = last set &minus; first set; negative means
-            starting too hot); the table lists every type found, including outdoor hill reps. Race days are
+            40/20 VO2 sessions (mean/best rep power, and fade = last third of reps &minus; first third;
+            negative means faded through the session); the table lists every type found, including outdoor
+            hill reps. Race days are
             excluded. See <code>bin/intervals</code> for per-type trends across all interval types.</li>
         <li><strong>Aerobic efficiency</strong> (EF): normalised power &divide; average heart rate on steady rides
             (&ge;60 min moving, variability index &le;1.15, &ge;80% HR coverage). Rising EF at similar HR =
@@ -564,7 +565,7 @@ html = <<~HTML
             datasets: [
               line('best rep W', intervals.bestW, '#2a9d4e'),
               line('mean rep W', intervals.meanW, '#e8833a'),
-              { type: 'bar', label: 'fade W (last − first set)', data: intervals.fadeW,
+              { type: 'bar', label: 'fade W (end − start of session)', data: intervals.fadeW,
                 backgroundColor: intervals.fadeW.map(v => v >= 0 ? 'rgba(42,157,78,0.45)' : 'rgba(204,68,68,0.55)'),
                 yAxisID: 'fade', order: 3 }
             ]
