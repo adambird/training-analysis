@@ -1,5 +1,5 @@
 # Copy to races.yml (gitignored) and list your races. Used by bin/fitness
-# (race-day analysis) and excluded from interval detection.
+# for race-day analysis (each race ranked against training rides as percentiles).
 #
 # The longest ride on each date is treated as the race; shorter same-day rides
 # are warm-ups. role: key = target race, prep = preparation race (optional).

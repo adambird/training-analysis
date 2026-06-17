@@ -19,11 +19,6 @@ module Config
     dir && File.expand_path(dir)
   end
 
-  # Functional threshold / critical power in watts; anchors interval detection.
-  def ftp
-    (ENV['FTP'] || data['ftp'] || 250).to_i
-  end
-
   # Aborts with a setup hint if the workout directory isn't usable.
   def require_workout_dir!
     dir = workout_dir

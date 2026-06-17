@@ -5,7 +5,7 @@ races.yml
 # Local Claude Code settings (per-machine permission grants)
 .claude/settings.local.json
 
-# Generated CSVs (bin/analyze, bin/fitness, bin/intervals)
+# Generated CSVs (bin/fitness --csv)
 data/*
 !data/.gitkeep
 

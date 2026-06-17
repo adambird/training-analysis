@@ -7,7 +7,6 @@ require 'json'
 require 'csv'
 require 'date'
 require_relative '../lib/fitness'
-require_relative '../lib/intervals'
 require_relative '../lib/config'
 
 options = {
@@ -38,8 +37,6 @@ paths = Dir.children(options[:dir])
 abort "no workout files in #{options[:dir]}" if paths.empty?
 
 # --- Race days ---------------------------------------------------------------
-# Loaded up front so race days can be excluded from interval detection (a
-# race's repeated surges look like an interval set).
 require 'yaml'
 races_path = options[:races] || File.expand_path('../races.yml', __dir__)
 race_days = []
@@ -50,19 +47,11 @@ if File.exist?(races_path)
   race_days = race_list.map { |r| r[:date] }
 end
 
-interval_sessions = []
 rides = paths.filter_map do |path|
   activity = Activity.load(path)
-  next unless activity
-
-  unless race_days.include?(activity.start_time.to_date)
-    session = Intervals.detect(activity, ftp: Config.ftp)
-    interval_sessions << session if session
-  end
-  Fitness.analyse_ride(activity)
+  activity && Fitness.analyse_ride(activity)
 end.uniq { |r| [r.start_time, r.duration_seconds] }.sort_by(&:start_time)
 abort 'no rides with power data found' if rides.empty?
-interval_sessions = interval_sessions.uniq { |s| s.start_time.to_i }.sort_by(&:start_time)
 
 warn "#{rides.size} rides with power data (#{rides.first.start_time.strftime('%Y-%m-%d')} to #{rides.last.start_time.strftime('%Y-%m-%d')})"
 
@@ -259,28 +248,6 @@ races_json = JSON.generate(
   metrics: RACE_METRICS.keys.to_h { |k| [k, race_analysis.map { |ra| ra[:metrics][k][:pctl] }] }
 )
 
-intervals_section = ''
-# The chart focuses on 40/20 (the consistent indoor VO2 progression); the
-# table lists every detected interval type. bin/intervals has per-type trends.
-v40 = interval_sessions.select { |s| s.type == '40/20' }
-intervals_json = JSON.generate(
-  labels: v40.map { |s| s.start_time.strftime('%Y-%m-%d') },
-  meanW: v40.map(&:mean_w),
-  bestW: v40.map(&:best_w),
-  fadeW: v40.map(&:fade_w)
-)
-if interval_sessions.any?
-  intervals_table = table(
-    ['date', 'type', 'reps', 'sets', 'mean W', 'best W', 'fade W', 'set averages'],
-    interval_sessions.map do |s|
-      [s.start_time.strftime('%Y-%m-%d'), s.type, s.rep_count, s.sets.map(&:size).join('+'),
-       s.mean_w, s.best_w, s.fade_w ? format('%+d', s.fade_w) : nil, s.set_avgs.join(' → ')]
-    end
-  )
-  type_counts = interval_sessions.group_by(&:type).transform_values(&:size)
-                                 .sort_by { |_, c| -c }.map { |t, c| "#{t} (#{c})" }.join(', ')
-  intervals_section = "<details><summary>Interval sessions — #{type_counts}</summary>#{intervals_table}</details>"
-end
 
 data_json = JSON.generate(
   durations: duration_labels,
@@ -354,7 +321,6 @@ html = <<~HTML
       <details><summary>Power curve numbers</summary>#{mmp_table}</details>
       #{durability_tables.join("\n")}
       #{race_section}
-      #{intervals_section}
       <details><summary>Early punch numbers — first 30 min</summary>#{early_table}</details>
       <details><summary>Monthly CP / aerobic efficiency numbers</summary>#{monthly_table}</details>
     </div>
@@ -382,12 +348,6 @@ html = <<~HTML
             (race days excluded). 50th percentile = a typical hard training day; 100th = the race
             exceeded every training ride. Low percentiles on a race day are informative too &mdash; they
             usually mean the race didn't demand that quality (e.g. no early surges).</li>
-        <li><strong>Interval sessions</strong>: detected by power signature (consistent efforts clustered
-            in time) and classified by rep length, since the files carry no workout name. The chart tracks
-            40/20 VO2 sessions (mean/best rep power, and fade = last third of reps &minus; first third;
-            negative means faded through the session); the table lists every type found, including outdoor
-            hill reps. Race days are
-            excluded. See <code>bin/intervals</code> for per-type trends across all interval types.</li>
         <li><strong>Aerobic efficiency</strong> (EF): normalised power &divide; average heart rate on steady rides
             (&ge;60 min moving, variability index &le;1.15, &ge;80% HR coverage). Rising EF at similar HR =
             aerobic improvement. <strong>Drift</strong> compares power:HR between ride halves; lower is better
@@ -398,7 +358,6 @@ html = <<~HTML
     <script>
       const d = #{data_json};
       const races = #{races_json};
-      const intervals = #{intervals_json};
 
       // Centred 3-month rolling median: shows the trajectory without
       // imposing a straight line on seasonal data, and is robust to
@@ -557,30 +516,7 @@ html = <<~HTML
         });
       }
 
-      // 6. 40/20 interval sessions — rep power and within-session fade
-      if (intervals.labels.length) {
-        new Chart(addCanvas(), {
-          data: {
-            labels: intervals.labels,
-            datasets: [
-              line('best rep W', intervals.bestW, '#2a9d4e'),
-              line('mean rep W', intervals.meanW, '#e8833a'),
-              { type: 'bar', label: 'fade W (end − start of session)', data: intervals.fadeW,
-                backgroundColor: intervals.fadeW.map(v => v >= 0 ? 'rgba(42,157,78,0.45)' : 'rgba(204,68,68,0.55)'),
-                yAxisID: 'fade', order: 3 }
-            ]
-          },
-          options: {
-            plugins: { title: { display: true, text: '40/20 VO2 sessions — rep power and within-session fade', font: { size: 16 } }, legend: sortByIndex },
-            scales: {
-              y: { position: 'left', title: { display: true, text: 'rep watts' } },
-              fade: { position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'fade W (+ = finished stronger)' } }
-            }
-          }
-        });
-      }
-
-      // 7. Aerobic efficiency
+      // 6. Aerobic efficiency
       new Chart(addCanvas(), {
         data: {
           labels: d.months,
