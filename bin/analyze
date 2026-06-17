@@ -7,7 +7,7 @@ options = {
   dir: Config.workout_dir,
   min_duration: 120,
   windows: [60, 180, 300],
-  pct: 85,
+  pct: 75,
   ref_window_days: 90,
   csv: nil
 }
@@ -19,7 +19,7 @@ OptionParser.new do |o|
   o.on('--window SECONDS', Integer, 'Effort duration in seconds, repeatable; replaces defaults (60 180 300)') do |v|
     (options[:custom_windows] ||= []) << v
   end
-  o.on('--pct N', Integer, 'Effort threshold as % of rolling-best at each duration (default 85)') { |v| options[:pct] = v }
+  o.on('--pct N', Integer, 'Effort threshold as % of rolling-best at each duration (default 75)') { |v| options[:pct] = v }
   o.on('--ref-window-days N', Integer, 'Trailing window for "best" power (default 90)') { |v| options[:ref_window_days] = v }
   o.on('--csv FILE', 'Write per-ride results to CSV') { |v| options[:csv] = v }
 end.parse!

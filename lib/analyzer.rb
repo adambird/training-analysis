@@ -25,9 +25,9 @@ class Analyzer
   end
 
   # windows: array of durations in seconds
-  # effort_pct: fraction of rolling-best that counts as an effort (e.g. 0.85)
+  # effort_pct: fraction of rolling-best that counts as an effort (e.g. 0.75)
   # ref_window_days: trailing window over which "best" is taken
-  def initialize(dir:, min_duration_minutes:, windows:, effort_pct: 0.85, ref_window_days: 90)
+  def initialize(dir:, min_duration_minutes:, windows:, effort_pct: 0.75, ref_window_days: 90)
     @dir = dir
     @min_duration = min_duration_minutes * 60
     @windows = windows

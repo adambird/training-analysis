@@ -33,7 +33,7 @@ abort 'no effort columns found in CSV' if windows.empty?
 
 # From the params comment if present, else inferred from the shortest ride
 min_duration = (params['min_duration_min'] || rows.map { |r| r['duration_min'].to_f }.min.floor).to_i
-effort_pct = (params['effort_pct'] || 85).to_i
+effort_pct = (params['effort_pct'] || 75).to_i
 ref_window_days = (params['ref_window_days'] || 90).to_i
 
 # Stats are computed for every month in the CSV (not just the charted

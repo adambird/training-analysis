@@ -8,7 +8,7 @@ primary progression signal — it answers *"is my power improving?"* directly,
 without arbitrary thresholds. Alongside it, **effort frequency** answers a
 separate question — *"how often do I produce near-best efforts?"* — using a
 threshold set to a percentage of the rider's *own* rolling-best power at each
-duration (e.g. ≥85% of the best 1/3/5-min in the trailing 90 days), so it stays
+duration (e.g. ≥75% of the best 1/3/5-min in the trailing 90 days), so it stays
 meaningful as fitness changes rather than drifting with it.
 
 ## Setup
@@ -27,7 +27,7 @@ FTP, and race calendar. `workout_dir` / `ftp` can also be set via the
 
 ```sh
 # Uses workout_dir from config.yml; rides >= 120 min; durations 1/3/5 min;
-# effort threshold = 85% of rolling 90-day best at each duration
+# effort threshold = 75% of rolling 90-day best at each duration
 bundle exec bin/analyze
 
 # Custom durations, threshold %, reference window, and per-ride CSV
@@ -105,7 +105,7 @@ median) plus a full session table. The `bin/fitness` report carries a focused
   fourth power, mean, fourth root — reported for whole rides only, since NP
   is not meaningful over short windows.
 - **Effort thresholds** are per-ride: for each duration, the threshold is a
-  percentage (default 85%) of the best mean-maximal power at that duration over
+  percentage (default 75%) of the best mean-maximal power at that duration over
   a trailing window (default 90 days), drawn from all rides — so it tracks
   current fitness instead of being a fixed wattage. The power-duration curve
   (best power per duration) is the threshold-free progression metric.
