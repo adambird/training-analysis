@@ -164,7 +164,7 @@ prev = ->(&getter) { charted_months.map { |m| (e = monthly_by_month[m << 12]) &&
 # --- CSV --------------------------------------------------------------------
 if options[:csv]
   CSV.open(options[:csv], 'w') do |csv|
-    csv << ['date', 'duration_min', 'work_kj'] +
+    csv << ['date', 'duration_min', 'work_kj', 'distance_km', 'distance_mi'] +
            Fitness::MMP_DURATIONS.map { |d| "best_#{Fitness.duration_label(d)}_w" } +
            Fitness::DURABILITY_WINDOWS.flat_map { |w|
              Fitness::DURABILITY_KJS.map { |kj| "best_#{Fitness.duration_label(w)}_after_#{kj}kj_w" }
@@ -172,7 +172,8 @@ if options[:csv]
            Fitness::EARLY_WINDOWS.map { |w| "early_#{Fitness.duration_label(w)}_w" } +
            %w[ef decoupling_pct steady]
     rides.each do |r|
-      csv << [r.start_time.strftime('%Y-%m-%d %H:%M'), (r.duration_seconds / 60.0).round(1), r.work_kj] +
+      csv << [r.start_time.strftime('%Y-%m-%d %H:%M'), (r.duration_seconds / 60.0).round(1), r.work_kj,
+              r.distance_m && (r.distance_m / 1000.0).round(2), r.distance_m && (r.distance_m / 1609.344).round(2)] +
              Fitness::MMP_DURATIONS.map { |d| r.mmp[d]&.round(1) } +
              Fitness::DURABILITY_WINDOWS.flat_map { |w|
                Fitness::DURABILITY_KJS.map { |kj| r.durability[w][:after][kj]&.round(1) }

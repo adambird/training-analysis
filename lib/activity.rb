@@ -13,7 +13,7 @@ require_relative 'power_series'
 #   and power:HR, matching what Strava/Garmin report. moving_hrs entries are
 #   nil where the file has no heart rate sample.
 class Activity
-  attr_reader :path, :start_time, :powers, :moving_powers, :moving_hrs
+  attr_reader :path, :start_time, :powers, :moving_powers, :moving_hrs, :distance_m
 
   def self.load(path)
     data = read_raw(path)
@@ -30,7 +30,7 @@ class Activity
     return nil if parsed[:cycling] == false
     return nil if parsed[:samples].empty?
 
-    new(path, parsed[:samples])
+    new(path, parsed[:samples], parsed[:distance_m])
   end
 
   def self.read_raw(path)
@@ -41,8 +41,9 @@ class Activity
     end
   end
 
-  def initialize(path, samples)
+  def initialize(path, samples, distance_m = nil)
     @path = path
+    @distance_m = distance_m
     by_second = {} # last sample wins per second
     samples.sort_by(&:first).each { |ts, watts, bpm| by_second[ts] = [watts, bpm] }
     t0 = by_second.keys.first

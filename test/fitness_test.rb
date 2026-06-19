@@ -3,7 +3,7 @@ require_relative '../lib/fitness'
 require_relative '../lib/power_series'
 
 class FitnessTest < Minitest::Test
-  FakeActivity = Struct.new(:powers, :moving_powers, :moving_hrs, :start_time, :duration_seconds) do
+  FakeActivity = Struct.new(:powers, :moving_powers, :moving_hrs, :start_time, :duration_seconds, :distance_m) do
     def average_power = moving_powers.sum.to_f / moving_powers.size
     def normalised_power = PowerSeries.normalised_power(moving_powers)
   end

@@ -16,7 +16,7 @@ module Fitness
   EARLY_WINDOWS = [60, 180, 300].freeze
 
   RideMetrics = Struct.new(
-    :start_time, :duration_seconds, :work_kj, :mmp,
+    :start_time, :duration_seconds, :work_kj, :distance_m, :mmp,
     :avg_w, :np_w,                    # moving-time average and normalised power
     :durability,                      # {window => {fresh:, after: {kj => watts_or_nil}}}
     :early,                           # {window => best_watts} in first 30 min, nil for short rides
@@ -48,6 +48,7 @@ module Fitness
       start_time: activity.start_time,
       duration_seconds: activity.duration_seconds,
       work_kj: powers.sum / 1000,
+      distance_m: activity.distance_m,
       mmp: mmp,
       avg_w: activity.average_power.round(1),
       np_w: activity.normalised_power.round(1),

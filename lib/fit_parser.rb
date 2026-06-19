@@ -11,7 +11,8 @@ module FitParser
   FIELD_TIMESTAMP = 253
   FIELD_POWER = 7
   FIELD_HEART_RATE = 3
-  FIELD_SPORT = 5
+  FIELD_SPORT = 5            # session message; also distance in record messages
+  FIELD_TOTAL_DISTANCE = 9  # session message
   SPORT_CYCLING = 2
 
   module_function
@@ -36,7 +37,15 @@ module FitParser
       parse_entity(data, body_start, data_size, samples, state)
       pos = body_start + data_size + 2 # trailing CRC
     end
-    { samples: samples, cycling: state[:sport] && state[:sport] == SPORT_CYCLING }
+    # Distance is stored scaled by 100 (so raw / 100 = metres). Prefer the
+    # session total; fall back to the running record distance for files (e.g.
+    # some Zwift exports) that omit the session message.
+    raw_distance = state[:session_dist] || state[:record_dist]
+    {
+      samples: samples,
+      cycling: state[:sport] && state[:sport] == SPORT_CYCLING,
+      distance_m: raw_distance && raw_distance / 100.0
+    }
   end
 
   def parse_entity(data, start, size, samples, state)
@@ -107,8 +116,18 @@ module FitParser
 
     definition[:fields].each do |field_num, size|
       case field_num
-      when FIELD_SPORT
-        state[:sport] = data.getbyte(pos) if is_session && size == 1
+      when FIELD_SPORT # field 5: sport on the session, distance on a record
+        if is_session && size == 1
+          state[:sport] = data.getbyte(pos)
+        elsif is_record && size == 4
+          value = data[pos, 4].unpack1(big_endian ? 'N' : 'V')
+          state[:record_dist] = value if value != 0xFFFFFFFF
+        end
+      when FIELD_TOTAL_DISTANCE
+        if is_session && size == 4
+          value = data[pos, 4].unpack1(big_endian ? 'N' : 'V')
+          state[:session_dist] = value if value != 0xFFFFFFFF
+        end
       when FIELD_TIMESTAMP
         if size == 4
           value = data[pos, 4].unpack1(big_endian ? 'N' : 'V')

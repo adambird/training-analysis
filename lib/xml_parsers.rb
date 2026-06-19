@@ -20,7 +20,9 @@ module TcxParser
       bpm = tp.at_xpath('HeartRateBpm/Value')&.text&.to_i
       [Time.parse(time).to_i, watts.to_i, bpm&.positive? ? bpm : nil]
     end
-    { samples: samples, cycling: sport && sport.casecmp('biking').zero? }
+    # DistanceMeters is cumulative, so the largest value is the ride total.
+    dists = doc.xpath('//Trackpoint/DistanceMeters').map { |n| n.text.to_f }
+    { samples: samples, cycling: sport && sport.casecmp('biking').zero?, distance_m: dists.max }
   end
 end
 
@@ -42,6 +44,25 @@ module GpxParser
     end
     # Strava writes the numeric type 1 for rides; others write words
     cycling = type && (type == '1' || type.downcase.match?(/cycl|bik|ride/)) ? true : type && false
-    { samples: samples, cycling: cycling }
+    coords = doc.xpath('//trkpt').filter_map do |pt|
+      lat = pt['lat']&.to_f
+      lon = pt['lon']&.to_f
+      [lat, lon] if lat && lon
+    end
+    { samples: samples, cycling: cycling, distance_m: haversine_total(coords) }
+  end
+
+  # Cumulative great-circle distance (metres) along a list of [lat, lon] points.
+  def haversine_total(coords)
+    return nil if coords.size < 2
+
+    r = 6_371_000.0 # mean Earth radius, metres
+    rad = ->(d) { d * Math::PI / 180 }
+    coords.each_cons(2).sum do |(lat1, lon1), (lat2, lon2)|
+      dlat = rad.(lat2 - lat1)
+      dlon = rad.(lon2 - lon1)
+      a = Math.sin(dlat / 2)**2 + Math.cos(rad.(lat1)) * Math.cos(rad.(lat2)) * Math.sin(dlon / 2)**2
+      2 * r * Math.asin(Math.sqrt(a))
+    end
   end
 end
