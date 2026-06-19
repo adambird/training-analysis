@@ -142,17 +142,6 @@ module Fitness
     cp_fit(CP_DURATIONS.map { |d| [d, rides.filter_map { |r| r.mmp[d] }.max] })
   end
 
-  # Whether the CP fit reflects a *recent* hard effort rather than being
-  # carried forward by stale data. True when a ride on/after +since+ produced
-  # within 95% of the window's best at a sustained duration (>= 8 min) — the
-  # efforts that pin down CP's slope. A stale fit reads artificially low.
-  def fresh_cp_anchor?(window_rides, since)
-    [480, 600, 900, 1200].any? do |d|
-      best = window_rides.filter_map { |r| r.mmp[d] }.max
-      best && window_rides.any? { |r| r.mmp[d] && r.mmp[d] >= best * 0.95 && r.start_time.to_date >= since }
-    end
-  end
-
   def duration_label(seconds)
     seconds < 60 ? "#{seconds}s" : "#{seconds / 60}m"
   end

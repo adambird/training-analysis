@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
-# Fitness-progression report: power curve comparison, durability, critical
-# power trend, and aerobic efficiency, rendered as a self-contained HTML
-# file (Chart.js inlined from vendor/).
+# Fitness-progression report: power curve comparison, durability, early
+# punch, race-day percentiles, and aerobic efficiency, rendered as a
+# self-contained HTML file (Chart.js inlined from vendor/).
 require 'optparse'
 require 'json'
 require 'csv'
@@ -121,7 +121,6 @@ monthly_by_month = ext_months.to_h do |month|
   month_rides = by_month[month] || []
   window_rides = rides.select { |r| (Date.new(r.start_time.year, r.start_time.month, r.start_time.day) - (month >> 1)).between?(-90, 0) }
   cp = Fitness.cp_for(window_rides)
-  cp_fresh = !cp.nil? && Fitness.fresh_cp_anchor?(window_rides, (month >> 1) - 45)
   steady = month_rides.select(&:steady)
   durability = Fitness::DURABILITY_WINDOWS.to_h do |w|
     long_rides = month_rides.select { |r| r.durability[w][:after][Fitness::DURABILITY_KJS.first] }
@@ -144,7 +143,6 @@ monthly_by_month = ext_months.to_h do |month|
   [month, {
     label: "#{month.strftime('%Y-%m')} (#{month_rides.size})",
     cp: cp && cp[:cp],
-    cp_fresh: cp_fresh,
     w_prime: cp && cp[:w_prime_kj],
     durability: durability,
     early: early,
@@ -258,11 +256,6 @@ data_json = JSON.generate(
   priorMmp: Fitness::MMP_DURATIONS.map { |d| prior_mmp[d]&.round(1) },
   currentLabel: current_label, priorLabel: prior_label,
   months: monthly.map { |m| m[:label] },
-  cpFresh: monthly.map { |m| m[:cp_fresh] ? m[:cp] : nil },
-  cpStale: monthly.map { |m| m[:cp_fresh] ? nil : m[:cp] },
-  cpPrev: prev.() { |m| m[:cp_fresh] ? m[:cp] : nil },
-  wPrimeFresh: monthly.map { |m| m[:cp_fresh] ? m[:w_prime] : nil },
-  wPrimeStale: monthly.map { |m| m[:cp_fresh] ? nil : m[:w_prime] },
   durability: Fitness::DURABILITY_WINDOWS.to_h do |w|
     [Fitness.duration_label(w), {
       nLong: monthly.map { |m| m[:durability][w][:n_long] },
@@ -334,13 +327,11 @@ html = <<~HTML
       <ul>
         <li><strong>Power curve</strong>: best average power at each duration across all rides in the
             period. Comparing periods answers "faster or not" without choosing thresholds.</li>
-        <li><strong>Critical power</strong>: linear work&ndash;time model fitted to the best 3&ndash;20 min efforts
-            in the trailing 90 days. CP approximates FTP; W&prime; is anaerobic capacity. Both are
-            only as good as the hardest efforts ridden in the window. Months whose window has no
-            <em>recent</em> hard sustained effort (nothing within 95% of the window best at &ge;8 min in
-            the last 45 days) are carried forward by stale data and read artificially low &mdash; these are
-            drawn as <strong>hollow grey markers off the trend line</strong> rather than dragging it down,
-            and the line bridges across them.</li>
+        <li><strong>Critical power</strong> (numbers table only): linear work&ndash;time model fitted to the
+            best 3&ndash;20 min efforts in the trailing 90 days. CP approximates FTP; W&prime; is anaerobic
+            capacity. Both are only as good as the hardest efforts ridden in the window &mdash; a month
+            with no recent hard sustained effort is carried forward by stale data and reads
+            artificially low.</li>
         <li><strong>Durability</strong>: best 3-min and 5-min power when fresh vs after 1,500/2,500 kJ of
             work in the same ride. Monthly lines are <em>medians</em> over the rides that reached the kJ
             mark (a max would track one good day; the median tracks what is typical), with the count of
@@ -413,15 +404,6 @@ html = <<~HTML
         tension: 0.3, spanGaps: true
       }, extra);
 
-      // Low-confidence months: hollow grey markers, no connecting line, so an
-      // unreliable carried-forward value is shown but never drawn as a trend.
-      const staleMarker = (label, data, axis) => ({
-        type: 'line', label, data, showLine: false,
-        borderColor: '#999', backgroundColor: 'transparent',
-        pointStyle: 'circle', pointRadius: 4, pointBorderWidth: 1.5, pointBorderColor: '#999',
-        yAxisID: axis, spanGaps: false
-      });
-
       // 1. Power curve comparison
       new Chart(addCanvas(), {
         data: {
@@ -437,30 +419,7 @@ html = <<~HTML
         }
       });
 
-      // 2. Critical power & W'
-      new Chart(addCanvas(), {
-        data: {
-          labels: d.months,
-          datasets: [
-            line('CP (≈FTP) W', d.cpFresh, '#2a9d4e', { yAxisID: 'watts' }),
-            medianDataset('CP W', d.cpFresh, '#2a9d4e', 'watts'),
-            ghostDataset('CP W', d.cpPrev, '#2a9d4e', 'watts'),
-            staleMarker('CP — no recent hard effort (unreliable)', d.cpStale, 'watts'),
-            line("W' kJ", d.wPrimeFresh, '#367aeb', { yAxisID: 'kj' }),
-            medianDataset("W' kJ", d.wPrimeFresh, '#367aeb', 'kj'),
-            staleMarker("W' — no recent hard effort (unreliable)", d.wPrimeStale, 'kj')
-          ]
-        },
-        options: {
-          plugins: { title: { display: true, text: 'Critical power (trailing 90 days)', font: { size: 16 } }, legend: sortByIndex },
-          scales: {
-            watts: { position: 'left', title: { display: true, text: 'CP watts' } },
-            kj: { position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: "W' kJ" } }
-          }
-        }
-      });
-
-      // 3. Durability — one chart per window; medians over long rides, with
+      // 2. Durability — one chart per window; medians over long rides, with
       // the count of rides reaching the first kJ mark as context bars.
       Object.entries(d.durability).forEach(([label, dur]) => {
         new Chart(addCanvas(), {
@@ -492,7 +451,7 @@ html = <<~HTML
         });
       });
 
-      // 4. Early punch — best efforts inside the first 30 minutes. Best
+      // 3. Early punch — best efforts inside the first 30 minutes. Best
       // lines visible; medians hidden by default (toggle via legend) since
       // they mostly track easy-ride starts.
       new Chart(addCanvas(), {
@@ -515,7 +474,7 @@ html = <<~HTML
         }
       });
 
-      // 5. Race days — each metric as a percentile of the training rides
+      // 4. Race days — each metric as a percentile of the training rides
       // (>=90 min, preceding 12 months). 50 = a typical hard training day,
       // 100 = better than every training ride.
       if (races.labels.length) {
@@ -535,7 +494,7 @@ html = <<~HTML
         });
       }
 
-      // 6. Aerobic efficiency
+      // 5. Aerobic efficiency
       new Chart(addCanvas(), {
         data: {
           labels: d.months,
