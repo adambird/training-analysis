@@ -231,6 +231,32 @@ monthly_table = table(
   monthly.map { |m| [m[:label], m[:cp], m[:w_prime], m[:ef], m[:drift], m[:steady_n]] }
 )
 
+# --- Year-by-year summary ---------------------------------------------------
+# Puts the durability story next to how hard the riding was, one calendar year
+# per row: intensity (median kJ/h), the 3-min decay basis (fresh vs fatigued
+# power and the % drop between them), and aerobic decoupling. Lets the
+# year-over-year shift in fatigue resistance be weighed against ride intensity.
+DECAY_W = 180                          # 3-min, the durability decay window
+KJ_MARK = Fitness::DURABILITY_KJS.first # 1500 kJ — the "long ride" threshold
+yearly_rows = rides.group_by { |r| r.start_time.year }.sort.map do |year, yr|
+  longs = yr.select { |r| r.durability[DECAY_W][:after][KJ_MARK] }
+  decay = longs.filter_map do |r|
+    fresh = r.mmp[DECAY_W]
+    fat = r.durability[DECAY_W][:after][KJ_MARK]
+    (fresh - fat) / fresh.to_f * 100 if fresh && fat
+  end
+  [year, yr.size, longs.size,
+   Fitness.median(yr.map { |r| r.work_kj / (r.duration_seconds / 3600.0) })&.round,
+   Fitness.median(longs.map { |r| r.mmp[DECAY_W] })&.round,
+   Fitness.median(longs.map { |r| r.durability[DECAY_W][:after][KJ_MARK] })&.round,
+   Fitness.median(decay)&.round(1),
+   Fitness.median(yr.filter_map(&:decoupling_pct))&.round(1)]
+end
+yearly_table = table(
+  ['year', 'rides', "long (≥#{KJ_MARK} kJ)", 'median kJ/h', 'fresh 3m W', 'fatigued 3m W', 'decay %', 'decoupling %'],
+  yearly_rows
+)
+
 race_section = ''
 if race_analysis.any?
   race_table = table(
@@ -318,6 +344,7 @@ html = <<~HTML
     <div id="tables">
       <details><summary>Power curve numbers</summary>#{mmp_table}</details>
       #{durability_tables.join("\n")}
+      <details open><summary>Year-by-year — intensity vs durability</summary>#{yearly_table}</details>
       #{race_section}
       <details><summary>Early punch numbers — first 30 min</summary>#{early_table}</details>
       <details><summary>Monthly CP / aerobic efficiency numbers</summary>#{monthly_table}</details>
