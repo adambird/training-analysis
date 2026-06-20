@@ -11,16 +11,21 @@ module FitParser
   FIELD_TIMESTAMP = 253
   FIELD_POWER = 7
   FIELD_HEART_RATE = 3
-  FIELD_SPORT = 5            # session message; also distance in record messages
-  FIELD_TOTAL_DISTANCE = 9  # session message
+  FIELD_SPORT = 5             # session message; also distance in record messages
+  FIELD_TOTAL_DISTANCE = 9    # session message
+  FIELD_ALTITUDE = 2          # record message (uint16, scale 5, offset 500)
+  FIELD_ENHANCED_ALTITUDE = 78 # record message (uint32, scale 5, offset 500)
+  FIELD_TOTAL_ASCENT = 22     # session message (uint16, metres)
+  ALT_SCALE = 5.0
+  ALT_OFFSET = 500.0
   SPORT_CYCLING = 2
 
   module_function
 
-  # Returns {samples:, cycling:} where samples is an array of
-  # [epoch_seconds, watts, bpm_or_nil] triples and cycling is true/false, or
-  # nil when the file carries no sport (Garmin watches record running power
-  # in the same power field, so sport matters).
+  # Returns {samples:, cycling:, distance_m:, total_ascent_m:} where samples is
+  # an array of [epoch_seconds, watts, bpm_or_nil, altitude_m_or_nil] tuples and
+  # cycling is true/false, or nil when the file carries no sport (Garmin watches
+  # record running power in the same power field, so sport matters).
   def parse(data)
     data = data.dup.force_encoding(Encoding::BINARY)
     samples = []
@@ -44,7 +49,8 @@ module FitParser
     {
       samples: samples,
       cycling: state[:sport] && state[:sport] == SPORT_CYCLING,
-      distance_m: raw_distance && raw_distance / 100.0
+      distance_m: raw_distance && raw_distance / 100.0,
+      total_ascent_m: state[:total_ascent]
     }
   end
 
@@ -113,6 +119,8 @@ module FitParser
     ts = nil
     power = nil
     heart_rate = nil
+    altitude = nil
+    enhanced_altitude = nil
 
     definition[:fields].each do |field_num, size|
       case field_num
@@ -127,6 +135,21 @@ module FitParser
         if is_session && size == 4
           value = data[pos, 4].unpack1(big_endian ? 'N' : 'V')
           state[:session_dist] = value if value != 0xFFFFFFFF
+        end
+      when FIELD_TOTAL_ASCENT
+        if is_session && size == 2
+          value = data[pos, 2].unpack1(big_endian ? 'n' : 'v')
+          state[:total_ascent] = value if value != 0xFFFF
+        end
+      when FIELD_ALTITUDE
+        if is_record && size == 2
+          value = data[pos, 2].unpack1(big_endian ? 'n' : 'v')
+          altitude = value / ALT_SCALE - ALT_OFFSET if value != 0xFFFF
+        end
+      when FIELD_ENHANCED_ALTITUDE
+        if is_record && size == 4
+          value = data[pos, 4].unpack1(big_endian ? 'N' : 'V')
+          enhanced_altitude = value / ALT_SCALE - ALT_OFFSET if value != 0xFFFFFFFF
         end
       when FIELD_TIMESTAMP
         if size == 4
@@ -149,7 +172,9 @@ module FitParser
 
     yield ts
     effective_ts = ts || last_ts
-    samples << [FIT_EPOCH + effective_ts, power, heart_rate] if is_record && effective_ts && power
+    if is_record && effective_ts && power
+      samples << [FIT_EPOCH + effective_ts, power, heart_rate, enhanced_altitude || altitude]
+    end
     pos + definition[:dev_bytes]
   end
 end

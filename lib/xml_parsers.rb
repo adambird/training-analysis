@@ -2,9 +2,9 @@ require 'nokogiri'
 require 'time'
 
 # TCX and GPX both store power as an extension on per-point elements.
-# Both parsers return {samples:, cycling:} where samples is an array of
-# [epoch_seconds, watts, bpm_or_nil] triples and cycling is true/false, or
-# nil when the file doesn't declare a sport.
+# Both parsers return {samples:, cycling:, distance_m:} where samples is an
+# array of [epoch_seconds, watts, bpm_or_nil, altitude_m_or_nil] tuples and
+# cycling is true/false, or nil when the file doesn't declare a sport.
 module TcxParser
   module_function
 
@@ -18,7 +18,8 @@ module TcxParser
       next unless time && watts
 
       bpm = tp.at_xpath('HeartRateBpm/Value')&.text&.to_i
-      [Time.parse(time).to_i, watts.to_i, bpm&.positive? ? bpm : nil]
+      alt = tp.at_xpath('AltitudeMeters')&.text
+      [Time.parse(time).to_i, watts.to_i, bpm&.positive? ? bpm : nil, alt&.to_f]
     end
     # DistanceMeters is cumulative, so the largest value is the ride total.
     dists = doc.xpath('//Trackpoint/DistanceMeters').map { |n| n.text.to_f }
@@ -40,7 +41,8 @@ module GpxParser
       next unless time && watts
 
       bpm = pt.at_xpath('.//hr')&.text&.to_i
-      [Time.parse(time).to_i, watts.to_i, bpm&.positive? ? bpm : nil]
+      ele = pt.at_xpath('ele')&.text
+      [Time.parse(time).to_i, watts.to_i, bpm&.positive? ? bpm : nil, ele&.to_f]
     end
     # Strava writes the numeric type 1 for rides; others write words
     cycling = type && (type == '1' || type.downcase.match?(/cycl|bik|ride/)) ? true : type && false

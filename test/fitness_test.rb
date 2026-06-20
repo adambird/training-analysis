@@ -3,9 +3,11 @@ require_relative '../lib/fitness'
 require_relative '../lib/power_series'
 
 class FitnessTest < Minitest::Test
-  FakeActivity = Struct.new(:powers, :moving_powers, :moving_hrs, :start_time, :duration_seconds, :distance_m) do
+  FakeActivity = Struct.new(:powers, :moving_powers, :moving_hrs, :start_time, :duration_seconds, :distance_m, :altitudes) do
     def average_power = moving_powers.sum.to_f / moving_powers.size
     def normalised_power = PowerSeries.normalised_power(moving_powers)
+    def total_ascent_m = nil
+    def ascent_between(_from, _to) = nil
   end
 
   def test_cp_fit_recovers_known_model

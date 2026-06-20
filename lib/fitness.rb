@@ -9,7 +9,7 @@ module Fitness
   MMP_DURATIONS = [5, 15, 30, 60, 120, 180, 300, 480, 600, 900, 1200, 1800, 2700, 3600, 5400].freeze
   # Durations used for the CP fit: 3-20 min, where the CP model holds
   CP_DURATIONS = [180, 300, 480, 600, 900, 1200].freeze
-  DURABILITY_WINDOWS = [180, 300].freeze # best 3 and 5 min, fresh vs fatigued
+  DURABILITY_WINDOWS = [60, 120, 180, 300].freeze # 1/2/3/5 min, fresh vs fatigued
   DURABILITY_KJS = [1500, 2500].freeze
   # Early punch: the efforts that make the front group at a race start
   EARLY_SECONDS = 1800 # first 30 minutes
@@ -20,6 +20,8 @@ module Fitness
     :avg_w, :np_w,                    # moving-time average and normalised power
     :durability,                      # {window => {fresh:, after: {kj => watts_or_nil}}}
     :early,                           # {window => best_watts} in first 30 min, nil for short rides
+    :total_ascent_m,                  # elevation gain, nil without altitude
+    :ascent_early_mph, :ascent_late_mph, # climbing rate before/after the first kJ mark
     :ef, :decoupling_pct, :steady,    # aerobic efficiency fields (nil without HR)
     keyword_init: true
   )
@@ -44,6 +46,16 @@ module Fitness
 
     ef, drift, steady = aerobic_efficiency(activity)
 
+    # Climbing rate (m/h) before vs after the first kJ mark — does late-ride
+    # terrain still offer sustained climbs, or does the riding flatten out once
+    # fatigued? Needs altitude and a ride that reaches the mark with time to spare.
+    mark = starts[DURABILITY_KJS.first]
+    ascent_early_mph = ascent_late_mph = nil
+    if activity.altitudes && mark&.positive? && powers.size - mark > 60
+      ascent_early_mph = ascent_rate(activity.ascent_between(0, mark), mark)
+      ascent_late_mph = ascent_rate(activity.ascent_between(mark, powers.size), powers.size - mark)
+    end
+
     RideMetrics.new(
       start_time: activity.start_time,
       duration_seconds: activity.duration_seconds,
@@ -54,8 +66,18 @@ module Fitness
       np_w: activity.normalised_power.round(1),
       durability: durability,
       early: early,
+      total_ascent_m: activity.total_ascent_m,
+      ascent_early_mph: ascent_early_mph,
+      ascent_late_mph: ascent_late_mph,
       ef: ef, decoupling_pct: drift, steady: steady
     )
+  end
+
+  # Metres climbed per hour over +seconds+ of elapsed time, nil if undefined.
+  def ascent_rate(metres, seconds)
+    return nil if metres.nil? || seconds.nil? || seconds <= 0
+
+    (metres / (seconds / 3600.0)).round
   end
 
   def median(values)

@@ -57,9 +57,14 @@ it as-is. Key flags:
 - **Critical power & W′** — linear work–time model fitted to the best 3–20 min
   efforts in a trailing 90-day window. CP approximates FTP; W′ is anaerobic
   capacity.
-- **Durability** — best 3/5-min power when fresh vs after 1,500/2,500 kJ in the
-  same ride, as monthly medians over the long rides that reached each mark.
-  Smaller fresh-vs-fatigued gaps mean better fatigue resistance.
+- **Durability** — best 1/2/3/5-min power when fresh vs after 1,500/2,500 kJ in
+  the same ride, as monthly medians over the long rides that reached each mark,
+  plus the fade as a % drop. Smaller gaps mean better fatigue resistance; the
+  1m→2m→3m decay gradient shows whether longer efforts fade more.
+- **Climbing** — total ascent per ride, and the climbing rate before vs after
+  the 1,500 kJ mark on long rides, to see whether late-ride terrain still
+  offers sustained climbs. Year-by-year tables sit alongside the durability
+  decay so fatigue resistance can be weighed against intensity and climbing.
 - **Early punch** — best 1/3/5-min power inside the first 30 minutes, the
   efforts that make the front group at a race start.
 - **Race days** — each race metric (from `races.yml`) as a percentile of the
