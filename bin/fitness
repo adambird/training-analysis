@@ -62,6 +62,8 @@ RACE_METRICS = {
   'early 1m W' => ->(r) { r.early && r.early[60] },
   'early 3m W' => ->(r) { r.early && r.early[180] },
   'early 5m W' => ->(r) { r.early && r.early[300] },
+  '3m after 1000kJ W' => ->(r) { r.durability[180][:after][1000] },
+  '5m after 1000kJ W' => ->(r) { r.durability[300][:after][1000] },
   '3m after 2000kJ W' => ->(r) { r.durability[180][:after][2000] },
   '5m after 2000kJ W' => ->(r) { r.durability[300][:after][2000] }
 }.freeze
