@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
-# Fitness-progression report: power curve comparison, durability, climbing,
-# early punch, race-day percentiles, and aerobic efficiency, rendered as a
-# self-contained HTML file (Chart.js inlined from vendor/).
+# Fitness-progression report: power curve comparison, durability, intensity
+# mix, early punch, race-day percentiles, and aerobic efficiency, rendered as
+# a self-contained HTML file (Chart.js inlined from vendor/).
 require 'optparse'
 require 'json'
 require 'csv'
@@ -151,8 +151,6 @@ monthly_by_month = ext_months.to_h do |month|
     vals = with_early.filter_map { |r| r.early[w] }
     [w, { max: vals.max&.round(1), med: Fitness.median(vals)&.round(1) }]
   end
-  with_alt = month_rides.select(&:total_ascent_m)
-  with_late = month_rides.select(&:ascent_late_mph)
   month_kjph = month_rides.filter_map { |r| ride_kjph.(r) }
   [month, {
     label: "#{month.strftime('%Y-%m')} (#{month_rides.size})",
@@ -161,9 +159,6 @@ monthly_by_month = ext_months.to_h do |month|
     durability: durability,
     early: early,
     early_n: with_early.size,
-    ascent: Fitness.median(with_alt.map(&:total_ascent_m))&.round,
-    ascent_early: Fitness.median(with_late.filter_map(&:ascent_early_mph))&.round,
-    ascent_late: Fitness.median(with_late.filter_map(&:ascent_late_mph))&.round,
     intensity: INTENSITY_BANDS.map { |_, test| month_kjph.count { |k| test.(k) } },
     ef: steady.empty? ? nil : (steady.sum(&:ef) / steady.size).round(3),
     drift: (drifts = steady.filter_map(&:decoupling_pct)).empty? ? nil : (drifts.sum / drifts.size).round(1),
@@ -349,10 +344,6 @@ data_json = JSON.generate(
       med: monthly.map { |m| m[:early][w][:med] }
     }]
   end,
-  ascent: monthly.map { |m| m[:ascent] },
-  ascentPrev: prev.() { |m| m[:ascent] },
-  ascentEarly: monthly.map { |m| m[:ascent_early] },
-  ascentLate: monthly.map { |m| m[:ascent_late] },
   intensity: INTENSITY_BANDS.each_with_index.to_h { |(label, _), i| [label, monthly.map { |m| m[:intensity][i] }] },
   ef: monthly.map { |m| m[:ef] },
   efPrev: prev.() { |m| m[:ef] },
@@ -587,31 +578,7 @@ html = <<~HTML
         });
       });
 
-      // 3. Climbing — median total ascent per month (volume), plus the climbing
-      // rate before vs after the first kJ mark on long rides. A late rate well
-      // below the early rate means the back end of long rides flattens out, so
-      // sustained climbing efforts aren't being trained when already fatigued.
-      new Chart(addCanvas(), {
-        data: {
-          labels: d.months,
-          datasets: [
-            { type: 'bar', label: 'median total ascent m', data: d.ascent,
-              backgroundColor: 'rgba(120, 120, 120, 0.30)', yAxisID: 'm', order: 3 },
-            ghostDataset('median total ascent m', d.ascentPrev, '#777', 'm'),
-            line('early climb m/h (long rides)', d.ascentEarly, '#2a9d4e', { yAxisID: 'rate' }),
-            line('late climb m/h (long rides)', d.ascentLate, '#c44', { yAxisID: 'rate' })
-          ]
-        },
-        options: {
-          plugins: { title: { display: true, text: 'Climbing — total ascent, and climbing rate early vs late on long rides', font: { size: 16 } }, legend: sortByIndex },
-          scales: {
-            m: { position: 'left', beginAtZero: true, title: { display: true, text: 'total ascent (m)' } },
-            rate: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: 'climb rate (m/h)' } }
-          }
-        }
-      });
-
-      // 4. Intensity mix — rides per month in each work-rate band, stacked.
+      // 3. Intensity mix — rides per month in each work-rate band, stacked.
       // Shows both volume (bar height) and the easy/hard balance; a healthy
       // base is mostly easy with a regular hard slice, not a grey-zone middle.
       new Chart(addCanvas(), {
@@ -628,7 +595,7 @@ html = <<~HTML
         }
       });
 
-      // 5. Early punch — best efforts inside the first 30 minutes. Best
+      // 4. Early punch — best efforts inside the first 30 minutes. Best
       // lines visible; medians hidden by default (toggle via legend) since
       // they mostly track easy-ride starts.
       new Chart(addCanvas(), {
@@ -651,7 +618,7 @@ html = <<~HTML
         }
       });
 
-      // 6. Race days — each metric as a percentile of the training rides
+      // 5. Race days — each metric as a percentile of the training rides
       // (>=90 min, preceding 12 months). 50 = a typical hard training day,
       // 100 = better than every training ride.
       if (races.labels.length) {
@@ -671,7 +638,7 @@ html = <<~HTML
         });
       }
 
-      // 7. Aerobic efficiency
+      // 6. Aerobic efficiency
       new Chart(addCanvas(), {
         data: {
           labels: d.months,
