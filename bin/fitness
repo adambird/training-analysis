@@ -255,7 +255,7 @@ monthly_table = table(
 # decay gradient — fade grows with effort length), and aerobic decoupling. The
 # second tests whether late-ride terrain still offers sustained climbs: total
 # ascent and the climbing rate before vs after the kJ mark.
-KJ_MARK = Fitness::DURABILITY_KJS.first # 1500 kJ — the "long ride" threshold
+KJ_MARK = Fitness::DURABILITY_KJS.first # 1000 kJ — the "long ride" threshold (matches durability studies)
 DECAY_WINDOWS = [60, 120, 180].freeze   # 1/2/3 min — the decay gradient
 by_year = rides.group_by { |r| r.start_time.year }.sort
 
@@ -415,8 +415,11 @@ html = <<~HTML
             capacity. Both are only as good as the hardest efforts ridden in the window &mdash; a month
             with no recent hard sustained effort is carried forward by stale data and reads
             artificially low.</li>
-        <li><strong>Durability</strong>: best 1/2/3/5-min power when fresh vs after 1,500/2,500 kJ of
-            work in the same ride. Monthly lines are <em>medians</em> over the rides that reached the kJ
+        <li><strong>Durability</strong>: best 1/2/3/5-min power when fresh vs after 1,000/1,500/2,500 kJ of
+            work in the same ride. The 1,000&nbsp;kJ mark matches the load used in published amateur
+            durability studies, so the % decline can be read against those benchmarks (competitively
+            successful amateurs ~6&ndash;7%, less successful ~12&ndash;13%, on 20-min power); 1,500/2,500&nbsp;kJ
+            probe deeper fatigue. Monthly lines are <em>medians</em> over the rides that reached the kJ
             mark (a max would track one good day; the median tracks what is typical), with the count of
             such rides as bars. "Median fresh" is over the same long rides, so the fresh-vs-fatigued gap
             is like-for-like. Smaller gaps = better fatigue resistance, the key gravel-racing quality. The
@@ -546,6 +549,9 @@ html = <<~HTML
               line('median fresh ' + label + ' W', dur.medFresh, '#2a9d4e', { yAxisID: 'watts' }),
               medianDataset('median fresh', dur.medFresh, '#2a9d4e', 'watts'),
               ghostDataset('median fresh', dur.medFreshPrev, '#2a9d4e', 'watts'),
+              line('median after 1000 kJ', dur.medAfter['1000'], '#0d9488', { yAxisID: 'watts' }),
+              medianDataset('median after 1000 kJ', dur.medAfter['1000'], '#0d9488', 'watts'),
+              ghostDataset('median after 1000 kJ', dur.medAfterPrev['1000'], '#0d9488', 'watts'),
               line('median after 1500 kJ', dur.medAfter['1500'], '#e8833a', { yAxisID: 'watts' }),
               medianDataset('median after 1500 kJ', dur.medAfter['1500'], '#e8833a', 'watts'),
               ghostDataset('median after 1500 kJ', dur.medAfterPrev['1500'], '#e8833a', 'watts'),
@@ -567,6 +573,9 @@ html = <<~HTML
           data: {
             labels: d.months,
             datasets: [
+              line('decay after 1000 kJ %', decayPct(dur.medFresh, dur.medAfter['1000']), '#0d9488'),
+              medianDataset('decay after 1000 kJ', decayPct(dur.medFresh, dur.medAfter['1000']), '#0d9488', 'y'),
+              ghostDataset('decay after 1000 kJ %', decayPct(dur.medFreshPrev, dur.medAfterPrev['1000']), '#0d9488', 'y'),
               line('decay after 1500 kJ %', decayPct(dur.medFresh, dur.medAfter['1500']), '#e8833a'),
               medianDataset('decay after 1500 kJ', decayPct(dur.medFresh, dur.medAfter['1500']), '#e8833a', 'y'),
               ghostDataset('decay after 1500 kJ %', decayPct(dur.medFreshPrev, dur.medAfterPrev['1500']), '#e8833a', 'y'),

@@ -10,7 +10,10 @@ module Fitness
   # Durations used for the CP fit: 3-20 min, where the CP model holds
   CP_DURATIONS = [180, 300, 480, 600, 900, 1200].freeze
   DURABILITY_WINDOWS = [60, 120, 180, 300].freeze # 1/2/3/5 min, fresh vs fatigued
-  DURABILITY_KJS = [1500, 2500].freeze
+  # 1000 kJ matches the load used in published amateur durability studies, so
+  # the decline figures are comparable to those benchmarks; 1500/2500 probe
+  # deeper fatigue. The first mark is the primary "long ride" threshold.
+  DURABILITY_KJS = [1000, 1500, 2500].freeze
   # Early punch: the efforts that make the front group at a race start
   EARLY_SECONDS = 1800 # first 30 minutes
   EARLY_WINDOWS = [60, 180, 300].freeze
