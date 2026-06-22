@@ -67,10 +67,9 @@ it as-is. Key flags:
   the 1,500 kJ mark on long rides, to see whether late-ride terrain still
   offers sustained climbs. Year-by-year tables sit alongside the durability
   decay so fatigue resistance can be weighed against intensity and climbing.
-- **Early punch** — best 1/3/5-min power inside the first 30 minutes, the
-  efforts that make the front group at a race start.
 - **Race days** — each race metric (from `races.yml`) as a percentile of the
-  training rides ≥90 min in the preceding 12 months.
+  training rides ≥90 min in the preceding 12 months (includes early-effort and
+  fatigued-power metrics).
 - **Aerobic efficiency** — normalised power ÷ average heart rate on steady
   rides, plus half-by-half power:HR drift.
 

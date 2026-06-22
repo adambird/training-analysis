@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
 # Fitness-progression report: power curve comparison, durability, intensity
-# mix, early punch, race-day percentiles, and aerobic efficiency, rendered as
-# a self-contained HTML file (Chart.js inlined from vendor/).
+# mix, race-day percentiles, and aerobic efficiency, rendered as a
+# self-contained HTML file (Chart.js inlined from vendor/).
 require 'optparse'
 require 'json'
 require 'csv'
@@ -148,19 +148,12 @@ monthly_by_month = ext_months.to_h do |month|
       end
     }]
   end
-  with_early = month_rides.select(&:early)
-  early = Fitness::EARLY_WINDOWS.to_h do |w|
-    vals = with_early.filter_map { |r| r.early[w] }
-    [w, { max: vals.max&.round(1), med: Fitness.median(vals)&.round(1) }]
-  end
   month_intensity = month_rides.filter_map { |r| k = ride_kjph.(r); [k, r.duration_seconds / 3600.0] if k }
   [month, {
     label: "#{month.strftime('%Y-%m')} (#{month_rides.size})",
     cp: cp && cp[:cp],
     w_prime: cp && cp[:w_prime_kj],
     durability: durability,
-    early: early,
-    early_n: with_early.size,
     intensity: INTENSITY_BANDS.map { |_, test| month_intensity.select { |k, _| test.(k) }.sum { |_, h| h }.round(1) },
     ef: steady.empty? ? nil : (steady.sum(&:ef) / steady.size).round(3),
     drift: (drifts = steady.filter_map(&:decoupling_pct)).empty? ? nil : (drifts.sum / drifts.size).round(1),
@@ -231,15 +224,6 @@ durability_tables = Fitness::DURABILITY_WINDOWS.map do |w|
   )
   "<details><summary>Durability numbers — #{label}</summary>#{body}</details>"
 end
-
-early_table = table(
-  ['month', 'rides ≥30min'] +
-  Fitness::EARLY_WINDOWS.flat_map { |w| l = Fitness.duration_label(w); ["best #{l} W", "median #{l} W"] },
-  monthly.map do |m|
-    [m[:label], m[:early_n]] +
-      Fitness::EARLY_WINDOWS.flat_map { |w| [m[:early][w][:max], m[:early][w][:med]] }
-  end
-)
 
 monthly_table = table(
   ['month', 'CP W', "W' kJ", 'EF', 'drift %', 'steady rides'],
@@ -341,13 +325,6 @@ data_json = JSON.generate(
   end,
   durabilityKjs: Fitness::DURABILITY_KJS,
   firstKj: Fitness::DURABILITY_KJS.first,
-  early: Fitness::EARLY_WINDOWS.to_h do |w|
-    [Fitness.duration_label(w), {
-      max: monthly.map { |m| m[:early][w][:max] },
-      maxPrev: prev.() { |m| m[:early][w][:max] },
-      med: monthly.map { |m| m[:early][w][:med] }
-    }]
-  end,
   intensity: INTENSITY_BANDS.each_with_index.to_h { |(label, _), i| [label, monthly.map { |m| m[:intensity][i] }] },
   ef: monthly.map { |m| m[:ef] },
   efPrev: prev.() { |m| m[:ef] },
@@ -397,7 +374,6 @@ html = <<~HTML
       <details open><summary>Year-by-year — climbing (total &amp; late-ride rate)</summary>#{climbing_table}</details>
       <details open><summary>Year-by-year — intensity mix (easy / moderate / hard)</summary>#{intensity_table}</details>
       #{race_section}
-      <details><summary>Early punch numbers — first 30 min</summary>#{early_table}</details>
       <details><summary>Monthly CP / aerobic efficiency numbers</summary>#{monthly_table}</details>
     </div>
     <div class="methodology">
@@ -439,11 +415,6 @@ html = <<~HTML
             short one. The monthly chart stacks hours per band; the year-by-year table shows each band's
             share of training time. A polarized base &mdash; mostly easy with a regular hard slice rather
             than a grey-zone middle &mdash; is what tracked the best durability years.</li>
-        <li><strong>Early punch</strong>: best 1/3/5-min power inside the first 30 minutes of a ride &mdash;
-            the efforts that follow early accelerations and make the front group at a race start.
-            Observational: it only registers when something demanded the effort, so the best lines
-            (races, hard group rides) carry the signal; medians mostly track easy-ride starts and are
-            hidden by default.</li>
         <li><strong>Race days</strong> (from races.yml; the longest ride that day is the race): each race
             metric is shown as a percentile of the training rides &ge;90 min in the preceding 12 months
             (race days excluded). 50th percentile = a typical hard training day; 100th = the race
@@ -601,30 +572,7 @@ html = <<~HTML
         }
       });
 
-      // 4. Early punch — best efforts inside the first 30 minutes. Best
-      // lines visible; medians hidden by default (toggle via legend) since
-      // they mostly track easy-ride starts.
-      new Chart(addCanvas(), {
-        data: {
-          labels: d.months,
-          datasets: Object.entries(d.early).flatMap(([label, e], i) => {
-            const color = ['#2a9d4e', '#e8833a', '#367aeb'][i];
-            return [
-              line('best early ' + label + ' W', e.max, color),
-              medianDataset('best early ' + label, e.max, color),
-              ghostDataset('best early ' + label, e.maxPrev, color),
-              line('median early ' + label + ' W', e.med, color,
-                   { hidden: true, borderWidth: 1.5, pointRadius: 2 })
-            ];
-          })
-        },
-        options: {
-          plugins: { title: { display: true, text: 'Early punch — best efforts in the first 30 minutes', font: { size: 16 } }, legend: sortByIndex },
-          scales: { y: { title: { display: true, text: 'watts' } } }
-        }
-      });
-
-      // 5. Race days — each metric as a percentile of the training rides
+      // 4. Race days — each metric as a percentile of the training rides
       // (>=90 min, preceding 12 months). 50 = a typical hard training day,
       // 100 = better than every training ride.
       if (races.labels.length) {
@@ -644,7 +592,7 @@ html = <<~HTML
         });
       }
 
-      // 6. Aerobic efficiency
+      // 5. Aerobic efficiency
       new Chart(addCanvas(), {
         data: {
           labels: d.months,
