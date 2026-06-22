@@ -68,6 +68,16 @@ RACE_METRICS = {
   '5m after 2000kJ W' => ->(r) { r.durability[300][:after][2000] }
 }.freeze
 
+# One hue per effort duration so the same duration is easy to track across the
+# chart; shade deepens with fatigue (fresh/early → after 1000 kJ → after
+# 2000 kJ). NP is neutral grey — a whole-ride metric, not a duration effort.
+RACE_METRIC_COLOURS = {
+  'NP W' => '#64748b',
+  'early 1m W' => '#3b82f6',
+  'early 3m W' => '#86efac', '3m after 1000kJ W' => '#22c55e', '3m after 2000kJ W' => '#15803d',
+  'early 5m W' => '#fdba74', '5m after 1000kJ W' => '#f97316', '5m after 2000kJ W' => '#c2410c'
+}.freeze
+
 race_analysis = race_list.filter_map do |race|
   day_rides = rides.select { |r| ride_date.(r) == race[:date] }
   next warn("race day #{race[:date]} has no rides — skipped") if day_rides.empty?
@@ -304,7 +314,8 @@ end
 
 races_json = JSON.generate(
   labels: race_analysis.map { |ra| ra[:name] || ra[:label] },
-  metrics: RACE_METRICS.keys.to_h { |k| [k, race_analysis.map { |ra| ra[:metrics][k][:pctl] }] }
+  metrics: RACE_METRICS.keys.to_h { |k| [k, race_analysis.map { |ra| ra[:metrics][k][:pctl] }] },
+  colours: RACE_METRIC_COLOURS
 )
 
 
@@ -574,15 +585,17 @@ html = <<~HTML
 
       // 4. Race days — each metric as a percentile of the training rides
       // (>=90 min, preceding 12 months). 50 = a typical hard training day,
-      // 100 = better than every training ride.
+      // 100 = better than every training ride. Bar colour = effort duration
+      // (one hue per duration), darker shade = deeper fatigue, so same-duration
+      // efforts at fresh / 1000 kJ / 2000 kJ read as one colour family.
       if (races.labels.length) {
         new Chart(addCanvas(), {
           type: 'bar',
           data: {
             labels: races.labels,
-            datasets: Object.entries(races.metrics).map(([label, values], i) => ({
+            datasets: Object.entries(races.metrics).map(([label, values]) => ({
               label, data: values,
-              backgroundColor: ['#2a9d4e', '#7bc96f', '#e8833a', '#f2b134', '#c44', '#367aeb'][i]
+              backgroundColor: races.colours[label]
             }))
           },
           options: {
