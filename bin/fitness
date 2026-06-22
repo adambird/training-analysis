@@ -536,8 +536,9 @@ html = <<~HTML
       // watts (medians over long rides, with the count of rides reaching the
       // first kJ mark as context bars), then the decay as a percentage so the
       // year-over-year trend in fatigue resistance is visible independent of
-      // the absolute power trend.
-      Object.entries(d.durability).forEach(([label, dur]) => {
+      // the absolute power trend. 2m is omitted from the charts (kept in the
+      // tables) to keep the visual set focused on 1/3/5 min.
+      Object.entries(d.durability).filter(([label]) => label !== '2m').forEach(([label, dur]) => {
         new Chart(addCanvas(), {
           data: {
             labels: d.months,
