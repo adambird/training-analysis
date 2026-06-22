@@ -62,8 +62,8 @@ RACE_METRICS = {
   'early 1m W' => ->(r) { r.early && r.early[60] },
   'early 3m W' => ->(r) { r.early && r.early[180] },
   'early 5m W' => ->(r) { r.early && r.early[300] },
-  '3m after 1500kJ W' => ->(r) { r.durability[180][:after][1500] },
-  '5m after 1500kJ W' => ->(r) { r.durability[300][:after][1500] }
+  '3m after 2000kJ W' => ->(r) { r.durability[180][:after][2000] },
+  '5m after 2000kJ W' => ->(r) { r.durability[300][:after][2000] }
 }.freeze
 
 race_analysis = race_list.filter_map do |race|
@@ -415,11 +415,11 @@ html = <<~HTML
             capacity. Both are only as good as the hardest efforts ridden in the window &mdash; a month
             with no recent hard sustained effort is carried forward by stale data and reads
             artificially low.</li>
-        <li><strong>Durability</strong>: best 1/2/3/5-min power when fresh vs after 1,000/1,500/2,500 kJ of
+        <li><strong>Durability</strong>: best 1/2/3/5-min power when fresh vs after 1,000/2,000 kJ of
             work in the same ride. The 1,000&nbsp;kJ mark matches the load used in published amateur
             durability studies, so the % decline can be read against those benchmarks (competitively
-            successful amateurs ~6&ndash;7%, less successful ~12&ndash;13%, on 20-min power); 1,500/2,500&nbsp;kJ
-            probe deeper fatigue. Monthly lines are <em>medians</em> over the rides that reached the kJ
+            successful amateurs ~6&ndash;7%, less successful ~12&ndash;13%, on 20-min power); 2,000&nbsp;kJ
+            probes deeper, race-distance fatigue. Monthly lines are <em>medians</em> over the rides that reached the kJ
             mark (a max would track one good day; the median tracks what is typical), with the count of
             such rides as bars. "Median fresh" is over the same long rides, so the fresh-vs-fatigued gap
             is like-for-like. Smaller gaps = better fatigue resistance, the key gravel-racing quality. The
@@ -552,11 +552,9 @@ html = <<~HTML
               line('median after 1000 kJ', dur.medAfter['1000'], '#0d9488', { yAxisID: 'watts' }),
               medianDataset('median after 1000 kJ', dur.medAfter['1000'], '#0d9488', 'watts'),
               ghostDataset('median after 1000 kJ', dur.medAfterPrev['1000'], '#0d9488', 'watts'),
-              line('median after 1500 kJ', dur.medAfter['1500'], '#e8833a', { yAxisID: 'watts' }),
-              medianDataset('median after 1500 kJ', dur.medAfter['1500'], '#e8833a', 'watts'),
-              ghostDataset('median after 1500 kJ', dur.medAfterPrev['1500'], '#e8833a', 'watts'),
-              line('median after 2500 kJ', dur.medAfter['2500'], '#c44', { yAxisID: 'watts' }),
-              medianDataset('median after 2500 kJ', dur.medAfter['2500'], '#c44', 'watts')
+              line('median after 2000 kJ', dur.medAfter['2000'], '#c44', { yAxisID: 'watts' }),
+              medianDataset('median after 2000 kJ', dur.medAfter['2000'], '#c44', 'watts'),
+              ghostDataset('median after 2000 kJ', dur.medAfterPrev['2000'], '#c44', 'watts')
             ]
           },
           options: {
@@ -576,12 +574,9 @@ html = <<~HTML
               line('decay after 1000 kJ %', decayPct(dur.medFresh, dur.medAfter['1000']), '#0d9488'),
               medianDataset('decay after 1000 kJ', decayPct(dur.medFresh, dur.medAfter['1000']), '#0d9488', 'y'),
               ghostDataset('decay after 1000 kJ %', decayPct(dur.medFreshPrev, dur.medAfterPrev['1000']), '#0d9488', 'y'),
-              line('decay after 1500 kJ %', decayPct(dur.medFresh, dur.medAfter['1500']), '#e8833a'),
-              medianDataset('decay after 1500 kJ', decayPct(dur.medFresh, dur.medAfter['1500']), '#e8833a', 'y'),
-              ghostDataset('decay after 1500 kJ %', decayPct(dur.medFreshPrev, dur.medAfterPrev['1500']), '#e8833a', 'y'),
-              line('decay after 2500 kJ %', decayPct(dur.medFresh, dur.medAfter['2500']), '#c44'),
-              medianDataset('decay after 2500 kJ', decayPct(dur.medFresh, dur.medAfter['2500']), '#c44', 'y'),
-              ghostDataset('decay after 2500 kJ %', decayPct(dur.medFreshPrev, dur.medAfterPrev['2500']), '#c44', 'y')
+              line('decay after 2000 kJ %', decayPct(dur.medFresh, dur.medAfter['2000']), '#c44'),
+              medianDataset('decay after 2000 kJ', decayPct(dur.medFresh, dur.medAfter['2000']), '#c44', 'y'),
+              ghostDataset('decay after 2000 kJ %', decayPct(dur.medFreshPrev, dur.medAfterPrev['2000']), '#c44', 'y')
             ]
           },
           options: {

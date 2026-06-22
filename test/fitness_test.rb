@@ -59,16 +59,16 @@ class FitnessTest < Minitest::Test
   end
 
   def test_durability_detects_fade
-    # 250W until 1500 kJ (~6000s), then 200W with one 220W 5-min surge
-    powers = Array.new(6000, 250) + Array.new(3000, 200)
-    (7000...7300).each { |i| powers[i] = 220 }
+    # 250W until 1000 kJ (4000s), then 200W with one 220W 5-min surge
+    powers = Array.new(4000, 250) + Array.new(4000, 200)
+    (5000...5300).each { |i| powers[i] = 220 }
     activity = FakeActivity.new(powers, powers, Array.new(powers.size), Time.now, powers.size)
     m = Fitness.analyse_ride(activity)
     assert_in_delta 250.0, m.durability[300][:fresh], 0.5
-    assert_in_delta 220.0, m.durability[300][:after][1500], 0.5
-    assert_in_delta 220.0, m.durability[180][:after][1500], 0.5 # surge is 5 min long
-    assert_nil m.durability[300][:after][2500] # ride ends before 2500 kJ
-    assert_equal 2106, m.work_kj # 6000s*250 + 3000s*200 + 300s*20 extra
+    assert_in_delta 220.0, m.durability[300][:after][1000], 0.5
+    assert_in_delta 220.0, m.durability[180][:after][1000], 0.5 # surge is 5 min long
+    assert_nil m.durability[300][:after][2000] # ride ends before 2000 kJ
+    assert_equal 1806, m.work_kj # 4000s*250 + 4000s*200 + 300s*20 extra
   end
 
   def test_aerobic_efficiency_steady_ride
