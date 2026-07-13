@@ -7,6 +7,7 @@ require 'json'
 require 'csv'
 require 'date'
 require_relative '../lib/fitness'
+require_relative '../lib/altitude'
 require_relative '../lib/config'
 
 options = {
@@ -186,7 +187,7 @@ if options[:csv]
              Fitness::DURABILITY_KJS.map { |kj| "best_#{Fitness.duration_label(w)}_after_#{kj}kj_w" }
            } +
            Fitness::EARLY_WINDOWS.map { |w| "early_#{Fitness.duration_label(w)}_w" } +
-           %w[total_ascent_m ascent_early_mph ascent_late_mph ef decoupling_pct steady]
+           %w[total_ascent_m median_altitude_m altitude_power_pct ascent_early_mph ascent_late_mph ef decoupling_pct steady]
     rides.each do |r|
       csv << [r.start_time.strftime('%Y-%m-%d %H:%M'), (r.duration_seconds / 60.0).round(1), r.work_kj,
               r.distance_m && (r.distance_m / 1000.0).round(2), r.distance_m && (r.distance_m / 1609.344).round(2)] +
@@ -195,7 +196,9 @@ if options[:csv]
                Fitness::DURABILITY_KJS.map { |kj| r.durability[w][:after][kj]&.round(1) }
              } +
              Fitness::EARLY_WINDOWS.map { |w| r.early && r.early[w]&.round(1) } +
-             [r.total_ascent_m, r.ascent_early_mph, r.ascent_late_mph, r.ef, r.decoupling_pct, r.steady]
+             [r.total_ascent_m, r.median_altitude_m,
+              r.median_altitude_m && (Altitude.power_factor(r.median_altitude_m) * 100).round(1),
+              r.ascent_early_mph, r.ascent_late_mph, r.ef, r.decoupling_pct, r.steady]
     end
   end
   warn "Per-ride metrics written to #{options[:csv]}"
@@ -312,6 +315,45 @@ if race_analysis.any?
   race_section = "<details open><summary>Race day numbers</summary>#{race_table}</details>"
 end
 
+# --- Altitude ---------------------------------------------------------------
+# Rides whose median elevation clears the altitude threshold: their power reads
+# low for reasons of oxygen, not fitness. Surface them (with the available-power
+# factor and a sea-level equivalent for two key metrics) so a dip driven by an
+# altitude block isn't misread as lost form. Limited to the charted window.
+window_start = charted_months.first
+altitude_rides = rides.select do |r|
+  r.median_altitude_m && r.median_altitude_m >= Altitude::THRESHOLD_M &&
+    r.duration_seconds >= 1200 && # ignore sub-20-min fragments (coffee-stop splits)
+    Date.new(r.start_time.year, r.start_time.month, 1) >= window_start
+end
+altitude_section = ''
+altitude_note = ''
+if altitude_rides.any?
+  eq = ->(w, m) { w && "#{w.round} → #{Altitude.sea_level_equivalent(w, m).round}" }
+  altitude_table = table(
+    ['date', 'duration min', 'kJ', 'median elev', 'available power', 'best 5m W (obs → sea-level)', 'NP W (obs → sea-level)'],
+    altitude_rides.map do |r|
+      m = r.median_altitude_m
+      ft = (m / Altitude::M_PER_FT).round
+      [r.start_time.strftime('%Y-%m-%d'), (r.duration_seconds / 60.0).round, r.work_kj,
+       "#{m} m (#{ft} ft)", "#{(Altitude.power_factor(m) * 100).round}%",
+       eq.(r.mmp[300], m), eq.(r.np_w, m)]
+    end
+  )
+  altitude_section = "<details open><summary>Altitude rides — power reads low at elevation</summary>#{altitude_table}</details>"
+  blocks = altitude_rides
+           .group_by { |r| r.start_time.strftime('%b %Y') }
+           .map { |month, rs| "#{month} (#{rs.size})" }
+  altitude_note = <<~HTML
+    <div class="callout"><strong>⛰️ Altitude in this window.</strong>
+    #{altitude_rides.size} rides — #{blocks.join(', ')} — were ridden at a median elevation ≥
+    #{Altitude::THRESHOLD_M}&nbsp;m, where less oxygen caps aerobic power. Their watts read low for reasons
+    that have nothing to do with fitness — read them against the sea-level equivalents in the
+    <em>Altitude rides</em> table below, not as lost form. Assumes #{Altitude::DEFAULT_MODEL.to_s.tr('_', '-')}
+    athletes.</div>
+  HTML
+end
+
 races_json = JSON.generate(
   labels: race_analysis.map { |ra| ra[:name] || ra[:label] },
   metrics: RACE_METRICS.keys.to_h { |k| [k, race_analysis.map { |ra| ra[:metrics][k][:pctl] }] },
@@ -369,6 +411,7 @@ html = <<~HTML
       thead th { border-bottom: 2px solid #999; }
       .methodology { font-size: 0.85rem; color: #555; border-top: 1px solid #ddd; margin-top: 2.5rem; padding-top: 1rem; }
       .methodology ul { padding-left: 1.2rem; }
+      .callout { background: #fff7e6; border: 1px solid #f0c774; border-radius: 6px; padding: 0.7rem 0.9rem; margin: 0 0 1.5rem; font-size: 0.9rem; line-height: 1.4; }
     </style>
   </head>
   <body>
@@ -377,6 +420,7 @@ html = <<~HTML
     <p>Faint dotted lines show the same month one year earlier (seasonality-free
        comparison); dashed 3-month rolling medians are hidden by default &mdash;
        click any legend entry to toggle. Month labels show ride counts.</p>
+    #{altitude_note}
     <div id="charts"></div>
     <div id="tables">
       <details><summary>Power curve numbers</summary>#{mmp_table}</details>
@@ -385,6 +429,7 @@ html = <<~HTML
       <details open><summary>Year-by-year — climbing (total &amp; late-ride rate)</summary>#{climbing_table}</details>
       <details open><summary>Year-by-year — intensity mix (easy / moderate / hard)</summary>#{intensity_table}</details>
       #{race_section}
+      #{altitude_section}
       <details><summary>Monthly CP / aerobic efficiency numbers</summary>#{monthly_table}</details>
     </div>
     <div class="methodology">
@@ -419,6 +464,16 @@ html = <<~HTML
             includes sustained climbing: a late rate well below the early rate means the terrain flattens
             out once fatigued, so sustained climb-length efforts aren't being trained when tired. Indoor
             rides carry no altitude and are excluded from these figures.</li>
+        <li><strong>Altitude</strong>: a ride whose median elevation is &ge;#{Altitude::THRESHOLD_M}&nbsp;m is flagged as
+            an altitude ride, because thinner air caps the aerobic power available &mdash; so its watts read low
+            for reasons unrelated to fitness and would otherwise drag the trends down. The available-power
+            fraction is interpolated from published elevation&ndash;power tables (Bassett&nbsp;et&nbsp;al.,
+            Péronnet&nbsp;et&nbsp;al.): roughly 99% of sea-level power at 1,000&nbsp;ft, 94% at 5,000&nbsp;ft,
+            89% at 8,000&nbsp;ft and 84% at 10,000&nbsp;ft for #{Altitude::DEFAULT_MODEL.to_s.tr('_', '-')} athletes
+            (a multi-day trip only partly acclimatizes, so this conservative column is the default). The
+            <em>sea-level equivalent</em> in the altitude table is the observed watts divided by that fraction.
+            The correction uses the ride's <em>median</em> elevation, so hard efforts high on a climb are hit
+            harder than the whole-ride figure implies. Indoor rides carry no altitude and are never flagged.</li>
         <li><strong>Intensity mix</strong>: each ride's whole-ride work rate (kJ/h &asymp; elapsed-average
             watts &times; 3.6) bucketed into easy (&lt;550), moderate (550&ndash;700) and hard (&ge;700&nbsp;kJ/h).
             Thresholds are fixed, not FTP-relative, so the mix stays comparable across years. Weighted by

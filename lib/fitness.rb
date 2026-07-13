@@ -1,5 +1,6 @@
 require_relative 'activity'
 require_relative 'power_series'
+require_relative 'altitude'
 
 # Fitness-progression metrics for a single ride, plus the aggregations and
 # model fits used by bin/fitness: mean-maximal power, durability (power
@@ -24,6 +25,7 @@ module Fitness
     :durability,                      # {window => {fresh:, after: {kj => watts_or_nil}}}
     :early,                           # {window => best_watts} in first 30 min, nil for short rides
     :total_ascent_m,                  # elevation gain, nil without altitude
+    :median_altitude_m,               # median elevation, nil without altitude — drives altitude correction
     :ascent_early_mph, :ascent_late_mph, # climbing rate before/after the first kJ mark
     :ef, :decoupling_pct, :steady,    # aerobic efficiency fields (nil without HR)
     keyword_init: true
@@ -70,6 +72,7 @@ module Fitness
       durability: durability,
       early: early,
       total_ascent_m: activity.total_ascent_m,
+      median_altitude_m: activity.altitudes && Altitude.median(activity.altitudes)&.round,
       ascent_early_mph: ascent_early_mph,
       ascent_late_mph: ascent_late_mph,
       ef: ef, decoupling_pct: drift, steady: steady
