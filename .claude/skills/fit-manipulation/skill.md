@@ -137,16 +137,25 @@ def fix_fit_timestamps(input_file, output_file, offset_seconds):
                 defn = definitions[local_msg_type]
 
                 for field_num, field_size in defn['fields']:
-                    # Timestamp fields:
+                    # Timestamp fields that must ALL be updated:
                     # - Field 253: timestamp in record/event/device_info
                     # - Field 4: time_created in file_id (global msg 0)
-                    is_timestamp = (field_num == 253) or \
-                                   (field_num == 4 and defn['global_msg'] == 0)
+                    # - Field 2: start_time in session/lap (global msg 18/19)
+                    # - Field 5: local_timestamp in activity (global msg 34)
+                    #
+                    # CRITICAL: Apps like Wahoo use start_time to display
+                    # the activity date, not just timestamp!
+                    is_timestamp = (
+                        field_num == 253 or  # timestamp (most messages)
+                        (field_num == 4 and defn['global_msg'] == 0) or  # time_created
+                        (field_num == 2 and defn['global_msg'] in [18, 19]) or  # start_time
+                        (field_num == 5 and defn['global_msg'] == 34)  # local_timestamp
+                    )
 
                     if is_timestamp and field_size == 4:
                         fmt = '<I' if defn['arch'] == 0 else '>I'
                         old_ts = struct.unpack_from(fmt, data, pos)[0]
-                        if old_ts != 0xFFFFFFFF and old_ts > 0:
+                        if old_ts != 0xFFFFFFFF and 100000000 < old_ts < 2000000000:
                             new_ts = old_ts + offset_seconds
                             struct.pack_into(fmt, data, pos, new_ts)
 
@@ -197,14 +206,28 @@ def fix_fit_timestamps(input_file, output_file, offset_seconds):
 - **Invalid values:** 0xFF for uint8, 0xFFFF for uint16, 0xFFFFFFFF for uint32
 - **Endianness:** Stored in architecture byte of definition message (0 = little)
 
-## Common global message numbers
+## Common global message numbers and timestamp fields
 
-- 0: file_id (field 4 = time_created)
-- 18: session (field 5 = sport, field 9 = total_distance, field 22 = total_ascent)
-- 20: record (field 253 = timestamp, field 7 = power, field 3 = heart_rate,
-            field 2/78 = altitude, field 5 = distance)
-- 21: event
-- 23: device_info
+- **0: file_id**
+  - field 4 = time_created (when the file was created)
+- **18: session** (summary of entire activity)
+  - field 2 = start_time ⚠️ **CRITICAL** - apps use this for activity date!
+  - field 253 = timestamp (end time)
+  - field 5 = sport, field 9 = total_distance, field 22 = total_ascent
+- **19: lap**
+  - field 2 = start_time
+  - field 253 = timestamp (end time)
+- **20: record** (per-second data points)
+  - field 253 = timestamp
+  - field 7 = power, field 3 = heart_rate
+  - field 2/78 = altitude, field 5 = distance
+- **21: event**
+  - field 253 = timestamp
+- **23: device_info**
+  - field 253 = timestamp
+- **34: activity**
+  - field 253 = timestamp
+  - field 5 = local_timestamp (UTC offset applied)
 
 ## Python libraries available
 
@@ -221,3 +244,29 @@ def fix_fit_timestamps(input_file, output_file, offset_seconds):
 - **Modifying timestamps or fields:** Use binary parsing (Python example above)
 - **Creating new FIT files:** Use `garmin-fit-sdk.Encoder` with full message
   definitions (complex, see official FIT SDK docs)
+
+## Common gotchas
+
+### Timestamp fields for activity date/time
+
+When fixing corrupted timestamps, you MUST update ALL timestamp fields:
+
+1. **`field 253` (timestamp)** - Most messages use this
+2. **`field 4` in file_id** (time_created) - File creation time
+3. **`field 2` in session/lap** (start_time) - ⚠️ **CRITICAL**: Wahoo, Garmin, and
+   other apps use this to display the activity date, NOT the file_id time_created!
+4. **`field 5` in activity** (local_timestamp) - Should also be adjusted
+
+If you only update field 253 and field 4, the file will parse correctly but apps
+will still show the wrong date because they read the session `start_time` field.
+
+### Invalid timestamp check
+
+Always validate timestamps before adjusting:
+```python
+if old_ts != 0xFFFFFFFF and 100000000 < old_ts < 2000000000:
+    # Safe to adjust - this is roughly 1993-2033 range
+```
+
+Without range checking, you may accidentally adjust non-timestamp uint32 values
+that happen to be stored in timestamp fields.
